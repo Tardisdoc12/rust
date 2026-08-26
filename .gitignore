@@ -1,0 +1,7 @@
+/target
+/vcpkg
+**/*.py
+**/*.pt
+**/*.onnx*
+**/*.whl
+**/*.png
