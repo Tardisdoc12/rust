@@ -4,7 +4,7 @@
 // Date: 2026-08-25
 //--------------------------------------------------------------------------------------------------
 
-use std::cell::RefCell;
+use std::sync::Mutex;
 
 use ort::session::Session;
 use ort::ep::cuda::CUDA;
@@ -55,7 +55,7 @@ pub struct LetterboxInfo {
 pub struct YOLO26 {
     session: Option<Session>,
     classes: Vec<String>,
-    letterbox_info: RefCell<Option<LetterboxInfo>>,
+    letterbox_info: Mutex<Option<LetterboxInfo>>,
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -65,7 +65,7 @@ impl YOLO26 {
         YOLO26 {
             session: None,
             classes: Vec::new(),
-            letterbox_info: RefCell::new(None),
+            letterbox_info: Mutex::new(None),
         }
     }
 
@@ -285,7 +285,7 @@ impl ModelPipeline for YOLO26 {
 
     fn preprocess(&self, image: &Mat) -> anyhow::Result<Vec<f32>> {
         let (letterboxed, info) = self.letterbox(image, IMAGE_SIZE)?;
-        *self.letterbox_info.borrow_mut() = Some(info); // sauvegarde pour postprocess
+        *self.letterbox_info.lock().unwrap() = Some(info); // sauvegarde pour postprocess
 
         let mut rgb = Mat::default();
         imgproc::cvt_color(
@@ -353,7 +353,7 @@ impl ModelPipeline for YOLO26 {
             ));
         }
 
-        let info = self.letterbox_info.borrow()
+        let info = self.letterbox_info.lock().unwrap()
             .ok_or_else(|| anyhow::anyhow!("letterbox_info absent, preprocess doit être appelé avant postprocess"))?;
 
         let mut detections = Vec::new();

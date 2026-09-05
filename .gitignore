@@ -5,3 +5,6 @@
 **/*.onnx*
 **/*.whl
 **/*.png
+**/*.jpg
+**/*.lock
+*.lock
