@@ -5,32 +5,7 @@ use opencv::core::{Mat, CV_8UC3};
 use opencv::prelude::*;
 
 use crate::models::sam2::Sam2Processor;
-
-//--------------------------------------------------------------------------------------------------
-// Types de sortie exposés à Python
-//--------------------------------------------------------------------------------------------------
-
-#[pyclass(name = "MaskResult")]
-pub struct PyMaskResult {
-    #[pyo3(get)]
-    pub mask: Vec<f32>,
-    #[pyo3(get)]
-    pub width: i32,
-    #[pyo3(get)]
-    pub height: i32,
-    #[pyo3(get)]
-    pub score: f32,
-}
-
-#[pymethods]
-impl PyMaskResult {
-    fn __repr__(&self) -> String {
-        format!(
-            "MaskResult(width={}, height={}, score={:.2})",
-            self.width, self.height, self.score
-        )
-    }
-}
+use crate::detections::mask::Mask;
 
 //--------------------------------------------------------------------------------------------------
 // Wrapper du modèle
@@ -89,17 +64,13 @@ impl PySam2Processor {
         Ok(())
     }
 
-    fn predict_box(&mut self, bbox: (f32, f32, f32, f32)) -> PyResult<PyMaskResult> {
+    fn predict_box(&mut self, bbox: (f32, f32, f32, f32)) -> PyResult<Mask> {
         let resultat = self
             .inner
             .predict_box(bbox)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-        Ok(PyMaskResult {
-            mask: resultat.mask,
-            width: resultat.width,
-            height: resultat.height,
-            score: resultat.score,
-        })
+        Ok(resultat)
+
     }
 }

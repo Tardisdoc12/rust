@@ -9,11 +9,17 @@ use opencv::core::Mat;
 use opencv::prelude::*;
 use opencv::imgproc;
 
+use crate::detections::mask::Mask;
+
+//--------------------------------------------------------------------------------------------------
+
 const ENCODER_SIZE: i32 = 1024; // input_height/input_width du modèle
 const MASK_SCALE_FACTOR: i32 = 4; // encoder_input_size / scale_factor = résolution native du masque
 
 const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
+
+//--------------------------------------------------------------------------------------------------
 
 pub struct Sam2Processor {
     encoder: Option<Session>,
@@ -27,12 +33,7 @@ pub struct Sam2Processor {
     orig_height: i32,
 }
 
-pub struct MaskResult {
-    pub mask: Vec<f32>,       // masque final, taille orig_width x orig_height, logits (seuil à 0.0)
-    pub width: i32,
-    pub height: i32,
-    pub score: f32,           // score IoU du masque sélectionné
-}
+//--------------------------------------------------------------------------------------------------
 
 impl Sam2Processor {
     pub fn new() -> Self {
@@ -123,7 +124,7 @@ impl Sam2Processor {
 
     /// Prédit un masque pour une bbox (coordonnées dans l'espace de l'image ORIGINALE, en pixels).
     /// Convention SAM : une box = 2 points, labels 2 (top-left) et 3 (bottom-right).
-    pub fn predict_box(&mut self, bbox: (f32, f32, f32, f32)) -> anyhow::Result<MaskResult> {
+    pub fn predict_box(&mut self, bbox: (f32, f32, f32, f32)) -> anyhow::Result<Mask> {
         let (x1, y1, x2, y2) = bbox;
 
         // normalisation des points : ratio x et y SÉPARÉS (pas un scale unique, cohérent
@@ -174,7 +175,6 @@ impl Sam2Processor {
         let masks_shape: Vec<i64> = masks_tensor.0.to_vec();
         let masks_data = masks_tensor.1;
 
-        let num_masks = masks_shape[1] as usize;
         let mask_h = masks_shape[2] as usize;
         let mask_w = masks_shape[3] as usize;
 
@@ -203,13 +203,23 @@ impl Sam2Processor {
             0.0, 0.0, imgproc::INTER_LINEAR,
         )?;
 
-        let resized_data: &[f32] = resized_mask.data_typed::<f32>()?;
+        // Binarisation directe du Mat f32 (équivalent de `score > 0.0 -> 255 else 0`)
+        let mut mat_bin_f32 = Mat::default();
+        imgproc::threshold(
+            &resized_mask,
+            &mut mat_bin_f32,
+            0.0,
+            255.0,
+            imgproc::THRESH_BINARY,
+        )?;
 
-        Ok(MaskResult {
-            mask: resized_data.to_vec(),
-            width: self.orig_width,
-            height: self.orig_height,
-            score: scores[best_idx],
+        // Conversion CV_32F -> CV_8U
+        let mut mat_bin = Mat::default();
+        mat_bin_f32.convert_to(&mut mat_bin, opencv::core::CV_8UC1, 1.0, 0.0)?;
+
+        Ok(Mask{
+            mat: Mat::default(),
+            _mat_bin: mat_bin.try_clone()?,
         })
     }
 }
