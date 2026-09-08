@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 //--------------------------------------------------------------------------------------------------
 
 
-#[pyclass(name = "BBox")]
+#[pyclass(name = "BBox", from_py_object)]
 #[derive(Clone)]
 pub struct BBox {
     #[pyo3(get, set)]

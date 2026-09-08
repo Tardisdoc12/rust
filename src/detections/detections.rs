@@ -15,7 +15,7 @@ use crate::detections::detection_class::DetectionClass;
 
 //--------------------------------------------------------------------------------------------------
 
-#[pyclass(name = "Detection")]
+#[pyclass(name = "Detection", from_py_object)]
 #[derive(Clone)]
 pub struct Detection {
     #[pyo3(get, set)]

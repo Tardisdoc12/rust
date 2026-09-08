@@ -5,7 +5,7 @@ use opencv::core::{Mat, Point, Point2f, Vector, CV_8UC1, CV_8UC3, bitwise_and, R
 use opencv::prelude::*;
 use opencv::imgproc;
 
-#[pyclass(name = "Mask", unsendable)]
+#[pyclass(name = "Mask", unsendable, from_py_object)]
 #[derive(Clone)]
 pub struct Mask {
     pub mat: Mat,
