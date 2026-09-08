@@ -6,55 +6,9 @@ use opencv::prelude::*;
 
 use crate::models::model_core::ModelPipeline;
 use crate::models::yolo_26::YOLO26;
-
-//--------------------------------------------------------------------------------------------------
-// Types de sortie exposés à Python
-//--------------------------------------------------------------------------------------------------
-
-#[pyclass(name = "BoundingBox")]
-#[derive(Clone)]
-pub struct PyBoundingBox {
-    #[pyo3(get)]
-    pub x1: f32,
-    #[pyo3(get)]
-    pub y1: f32,
-    #[pyo3(get)]
-    pub x2: f32,
-    #[pyo3(get)]
-    pub y2: f32,
-}
-
-#[pymethods]
-impl PyBoundingBox {
-    fn __repr__(&self) -> String {
-        format!(
-            "BoundingBox(x1={:.1}, y1={:.1}, x2={:.1}, y2={:.1})",
-            self.x1, self.y1, self.x2, self.y2
-        )
-    }
-}
-
-#[pyclass(name = "Detection")]
-pub struct PyDetection {
-    #[pyo3(get)]
-    pub bbox: PyBoundingBox,
-    #[pyo3(get)]
-    pub score: f32,
-    #[pyo3(get)]
-    pub class_id: usize,
-    #[pyo3(get)]
-    pub class_label: String,
-}
-
-#[pymethods]
-impl PyDetection {
-    fn __repr__(&self) -> String {
-        format!(
-            "Detection(label='{}', score={:.2}, bbox={})",
-            self.class_label, self.score, self.bbox.__repr__()
-        )
-    }
-}
+use crate::detections::detections::Detection;
+use crate::detections::bbox::BBox;
+use crate::detections::mask::Mask;
 
 //--------------------------------------------------------------------------------------------------
 // Wrapper du modèle
@@ -79,7 +33,7 @@ impl PyYolo26 {
     }
 
     /// Prend une image numpy (H, W, 3) en uint8, renvoie une liste de détections
-    fn predict(&mut self, image: PyReadonlyArray3<'_, u8>) -> PyResult<Vec<PyDetection>> {
+    fn predict(&mut self, image: PyReadonlyArray3<'_, u8>) -> PyResult<Vec<Detection>> {
         let vue = image.as_array();
         let shape = vue.shape();
         let (hauteur, largeur, canaux) = (shape[0], shape[1], shape[2]);
@@ -123,21 +77,33 @@ impl PyYolo26 {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         // Conversion Vec<Detection> (Rust interne) -> Vec<PyDetection> (exposé Python)
-        let detections_py = resultat
+        let detections_py: Vec<Detection> = resultat
             .detections
             .into_iter()
-            .map(|d| PyDetection {
-                bbox: PyBoundingBox {
-                    x1: d.bbox.x1,
-                    y1: d.bbox.y1,
-                    x2: d.bbox.x2,
-                    y2: d.bbox.y2,
-                },
-                score: d.score,
-                class_id: d.class_id,
-                class_label: d.class_label,
+            .map(|d| {
+                let categorie = d.class_label
+                    .parse()
+                    .map_err(|e: String| PyRuntimeError::new_err(e))?;
+
+                let mask_mat = mat.try_clone()
+                    .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+                let bbox = BBox::new(
+                    d.bbox.x1,
+                    d.bbox.y1,
+                    d.bbox.x2,
+                    d.bbox.y2,
+                    (hauteur, largeur),
+                );
+
+                let mask = Mask {
+                    mat: mask_mat,
+                    _mat_bin: Mat::default(),
+                };
+
+                Ok(Detection::new(categorie, bbox, mask, "".to_string()))
             })
-            .collect();
+            .collect::<Result<Vec<_>, PyErr>>()?;
 
         Ok(detections_py)
     }

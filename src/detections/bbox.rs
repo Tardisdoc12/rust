@@ -38,23 +38,6 @@ impl BBox {
     ) -> Self {
         Self::new(x1, y1, x2, y2, img_shape)
     }
-}
-impl BBox {
-    pub fn new(
-        x1: f32,
-        y1: f32,
-        x2: f32,
-        y2: f32,
-        img_shape: (usize, usize)
-    ) -> Self {
-        Self {
-            x1: x1 / img_shape.1 as f32,
-            y1: y1 / img_shape.0 as f32,
-            x2: x2 / img_shape.1 as f32,
-            y2: y2 / img_shape.0 as f32,
-            img_shape
-        }
-    }
 
     pub fn area(&self) -> f32 {
         return (self.x2 - self.x1) * (self.y2 - self.y1)
@@ -90,6 +73,25 @@ impl BBox {
             self.x2 * self.img_shape.1 as f32,
             self.y2 * self.img_shape.0 as f32
         );
+    }
+
+}
+
+impl BBox {
+    pub fn new(
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        img_shape: (usize, usize)
+    ) -> Self {
+        Self {
+            x1: x1 / img_shape.1 as f32,
+            y1: y1 / img_shape.0 as f32,
+            x2: x2 / img_shape.1 as f32,
+            y2: y2 / img_shape.0 as f32,
+            img_shape
+        }
     }
 }
 

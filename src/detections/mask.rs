@@ -271,7 +271,6 @@ impl Mask {
         &mut self,
         py: Python<'py>,
         bbox: (i32, i32, i32, i32),
-        resultat_sam2: &Mask,
     ) -> PyResult<Bound<'py, PyArray3<u8>>> {
         // Étape 1 : crop (reste en Mat, pas de conversion)
         let crop = self.get_subpart_mat(bbox)
