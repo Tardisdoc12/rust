@@ -303,4 +303,8 @@ impl ModelPipeline for Yolov7PriceTag {
 
         Ok(extract_price(detections))
     }
+
+    fn unload(&mut self) {
+        self.session = None;
+    }
 }

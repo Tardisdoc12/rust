@@ -56,7 +56,13 @@ impl Mask {
 
         let rect = imgproc::min_area_rect(&points_cv)?;
         let size = rect.size;
-        Ok((size.width as f32, size.height as f32))
+
+        // Normalisation : width_cm = toujours le plus petit côté, height_cm = le plus grand,
+        // pour reproduire fidèlement min(w,h)/max(w,h) du Python (Detected.get_real_size_from_homography)
+        let width_cm = size.width.min(size.height);
+        let height_cm = size.width.max(size.height);
+
+        Ok((width_cm, height_cm))
     }
 
     pub fn perspective_transform_mat(

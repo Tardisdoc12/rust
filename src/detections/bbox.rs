@@ -75,6 +75,11 @@ impl BBox {
         );
     }
 
+    pub fn translate(&self, dx: f32, dy: f32, new_img_shape: (usize, usize)) -> BBox {
+        let (x1, y1, x2, y2) = self.xyxy(); // pixels absolus dans le crop
+        BBox::new(x1 + dx, y1 + dy, x2 + dx, y2 + dy, new_img_shape)
+    }
+
 }
 
 impl BBox {

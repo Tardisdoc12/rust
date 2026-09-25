@@ -66,6 +66,14 @@ impl Sam2Processor {
         Ok(())
     }
 
+    pub fn unload(&mut self) {
+        self.encoder = None;
+        self.decoder = None;
+        self.image_embed = None;
+        self.high_res_feat0 = None;
+        self.high_res_feat1 = None;
+    }
+
     /// Encode l'image une seule fois — équivalent de .encode() côté Python.
     /// IMPORTANT : simple resize (pas de letterbox), normalisation ImageNet.
     pub fn set_image(&mut self, image: &Mat) -> anyhow::Result<()> {

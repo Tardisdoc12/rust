@@ -4,6 +4,7 @@ use pyo3::prelude::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DetectionClass {
     Etiquette,
+    OtherEtiquette,
     Produit,
     NoProduct,
     Publicity,
@@ -14,6 +15,7 @@ impl std::fmt::Display for DetectionClass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DetectionClass::Etiquette => write!(f, "etiquette"),
+            DetectionClass::OtherEtiquette => write!(f, "other_etiquette"),
             DetectionClass::Produit => write!(f, "product"),
             DetectionClass::NoProduct => write!(f, "no_product"),
             DetectionClass::Publicity => write!(f, "publicity"),
@@ -27,6 +29,7 @@ impl std::str::FromStr for DetectionClass {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "etiquette" => Ok(DetectionClass::Etiquette),
+            "other_etiquette" => Ok(DetectionClass::OtherEtiquette),
             "product" => Ok(DetectionClass::Produit),
             "noproduct" => Ok(DetectionClass::NoProduct),
             "publicity" => Ok(DetectionClass::Publicity),

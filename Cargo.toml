@@ -13,5 +13,6 @@ ndarray = "0.17.2"
 numpy = "0.29.0"
 opencv = "0.100.1"
 ort = { version = "2.0.0-rc.13", features = ["cuda"] }
+postgres = "0.19.14"
 pyo3 = "0.29.2"
 serde_json = "1.0.151"

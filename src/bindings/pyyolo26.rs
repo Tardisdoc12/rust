@@ -78,12 +78,8 @@ impl PyYolo26 {
 
         // Conversion Vec<Detection> (Rust interne) -> Vec<PyDetection> (exposé Python)
         let detections_py: Vec<Detection> = resultat
-            .detections
             .into_iter()
             .map(|d| {
-                let categorie = d.class_label
-                    .parse()
-                    .map_err(|e: String| PyRuntimeError::new_err(e))?;
 
                 let mask_mat = mat.try_clone()
                     .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
@@ -101,7 +97,7 @@ impl PyYolo26 {
                     _mat_bin: Mat::default(),
                 };
 
-                Ok(Detection::new(categorie, bbox, mask, "".to_string()))
+                Ok(Detection::new(d.categorie, bbox, mask, "".to_string()))
             })
             .collect::<Result<Vec<_>, PyErr>>()?;
 

@@ -167,6 +167,10 @@ impl ModelPipeline for InceptionV3 {
     fn postprocess(&self, raw_output: &[f32]) -> anyhow::Result<Self::Output> {
         postprocess(raw_output, &self.classes)
     }
+
+    fn unload(&mut self) {
+        self.session = None;
+    }
 }
 
 //--------------------------------------------------------------------------------------------------

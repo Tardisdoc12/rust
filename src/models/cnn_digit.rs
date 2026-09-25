@@ -39,6 +39,10 @@ impl CNNDigit {
 impl ModelPipeline for CNNDigit {
     type Output = DigitResult;
 
+    fn unload(&mut self) {
+        self.session = None;
+    }
+
     fn setup_model(
         &mut self,
         model_path: &str,

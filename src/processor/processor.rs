@@ -24,6 +24,10 @@ where
         Ok(Self { model })
     }
 
+    pub fn unload(&mut self) {
+        self.model.unload();
+    }
+
     pub fn process(&mut self, image: &opencv::core::Mat) -> anyhow::Result<M::Output> {
         let input = self.model.preprocess(image)?;   // Mat -> Vec<f32>
         let raw = self.model.infer(&input)?;          // Vec<f32> -> Vec<f32> (logits bruts)

@@ -10,11 +10,13 @@ use pyo3::prelude::*;
 // use models::cnn_digit;
 // use models::sam2;
 // use processor::processor;
+mod detections;
 mod models;
 mod processor;
 mod functions_;
 mod bindings;
-mod detections;
+mod pipeline;
+mod tools_class;
 use detections::detection_class::DetectionClass;
 use detections::detections::Detection;
 use detections::bbox::BBox;
@@ -22,6 +24,7 @@ use detections::mask::Mask;
 use bindings::pycnndigit::PyCNNDigit;
 use bindings::pyyolo26::PyYolo26;
 use bindings::pysam2::PySam2Processor;
+use pipeline::workflow;
 
 
 
@@ -34,6 +37,7 @@ fn rust(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DetectionClass>()?;
     m.add_class::<BBox>()?;
     m.add_class::<Mask>()?;
+    m.add_function(wrap_pyfunction!(crate::pipeline::workflow::workflows, m)?)?;
     Ok(())
 }
 

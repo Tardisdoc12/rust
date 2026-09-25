@@ -119,12 +119,12 @@ impl Detection {
         self.mask.setup_from_python(image)
     }
 
-    fn set_prediction(&mut self, score: f32, label: String) {
+    pub fn set_prediction(&mut self, score: f32, label: String) {
         self.score = score;
         self.label = label;
     }
 
-    fn set_size(&mut self, width_cm: f32, height_cm: f32) {
+    pub fn set_size(&mut self, width_cm: f32, height_cm: f32) {
         self.width_cm = width_cm;
         self.height_cm = height_cm;
     }

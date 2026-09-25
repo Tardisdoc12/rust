@@ -151,6 +151,10 @@ impl ModelPipeline for EfficientNetB2 {
 
         Ok(ClassificationResult { class_label, score })
     }
+
+    fn unload(&mut self) {
+        self.session = None;
+    }
 }
 
 //--------------------------------------------------------------------------------------------------

@@ -11,7 +11,13 @@ use ort::ep::cuda::CUDA;
 use opencv::core::Mat;
 use opencv::prelude::*;
 use opencv::imgproc;
+use std::str::FromStr;
+use opencv::core::Rect;
 
+use crate::detections::detections::Detection as BigDetection;
+use crate::detections::bbox::BBox;
+use crate::detections::mask::Mask;
+use crate::detections::detection_class::DetectionClass;
 use crate::models::model_core::ModelPipeline;
 
 //--------------------------------------------------------------------------------------------------
@@ -20,27 +26,19 @@ const IMAGE_SIZE: i32 = 640;
 const CONF_THRESHOLD: f32 = 0.25;
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct BoundingBox {
-    pub x1: f32,
-    pub y1: f32,
-    pub x2: f32,
-    pub y2: f32,
+struct BoundingBox {  // plus de `pub`
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct Detection {
-    pub bbox: BoundingBox,
-    pub score: f32,
-    pub class_id: usize,
-    pub class_label: String,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct Detections {
-    pub detections: Vec<Detection>,
+struct RawDetection {  // renommé, plus de `pub`, purement interne
+    bbox: BoundingBox,
+    score: f32,
+    class_id: usize,
+    class_label: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -56,9 +54,23 @@ pub struct YOLO26 {
     session: Option<Session>,
     classes: Vec<String>,
     letterbox_info: Mutex<Option<LetterboxInfo>>,
+    source_image: Mutex<Option<Mat>>,  // NOUVEAU
 }
 
-//--------------------------------------------------------------------------------------------------
+fn crop_mat(image: &Mat, bbox: (i32, i32, i32, i32)) -> anyhow::Result<Mat> {
+    let (x1, y1, x2, y2) = bbox;
+    let largeur = image.cols();
+    let hauteur = image.rows();
+
+    let x1 = x1.max(0);
+    let y1 = y1.max(0);
+    let x2 = x2.min(largeur);
+    let y2 = y2.min(hauteur);
+
+    let rect = Rect::new(x1, y1, (x2 - x1).max(1), (y2 - y1).max(1));
+    let roi = Mat::roi(image, rect)?;
+    Ok(roi.try_clone()?)
+}
 
 impl YOLO26 {
     pub fn new() -> Self {
@@ -66,6 +78,7 @@ impl YOLO26 {
             session: None,
             classes: Vec::new(),
             letterbox_info: Mutex::new(None),
+            source_image: Mutex::new(None),  // NOUVEAU
         }
     }
 
@@ -136,8 +149,8 @@ impl YOLO26 {
 
     fn filter_detections(
         &self,
-        detections: Vec<Detection>,
-    ) -> Vec<Detection> {
+        detections: Vec<RawDetection>,
+    ) -> Vec<RawDetection> {
         let n = detections.len();
 
         if n <= 1 {
@@ -228,7 +241,7 @@ impl YOLO26 {
 }
 
 impl ModelPipeline for YOLO26 {
-    type Output = Detections;
+    type Output =  Vec<BigDetection>;
 
     fn setup_model(
         &mut self,
@@ -285,7 +298,8 @@ impl ModelPipeline for YOLO26 {
 
     fn preprocess(&self, image: &Mat) -> anyhow::Result<Vec<f32>> {
         let (letterboxed, info) = self.letterbox(image, IMAGE_SIZE)?;
-        *self.letterbox_info.lock().unwrap() = Some(info); // sauvegarde pour postprocess
+        *self.letterbox_info.lock().unwrap() = Some(info);
+        *self.source_image.lock().unwrap() = Some(image.try_clone()?);
 
         let mut rgb = Mat::default();
         imgproc::cvt_color(
@@ -356,7 +370,12 @@ impl ModelPipeline for YOLO26 {
         let info = self.letterbox_info.lock().unwrap()
             .ok_or_else(|| anyhow::anyhow!("letterbox_info absent, preprocess doit être appelé avant postprocess"))?;
 
-        let mut detections = Vec::new();
+        // .take() plutôt que .clone() : Mat n'implémente pas Clone (seulement try_clone),
+        // donc on retire la valeur de l'Option au lieu de la copier
+        let source_image = self.source_image.lock().unwrap().take()
+            .ok_or_else(|| anyhow::anyhow!("source_image absent, preprocess doit être appelé avant postprocess"))?;
+
+        let mut raw_detections = Vec::new();
 
         for chunk in raw_output.chunks_exact(6) {
             let score = chunk[4];
@@ -364,26 +383,51 @@ impl ModelPipeline for YOLO26 {
                 continue;
             }
 
-            let raw_bbox = BoundingBox {
-                x1: chunk[0],
-                y1: chunk[1],
-                x2: chunk[2],
-                y2: chunk[3],
-            };
-
-            // remappage vers les coordonnées de l'image d'origine
+            let raw_bbox = BoundingBox { x1: chunk[0], y1: chunk[1], x2: chunk[2], y2: chunk[3] };
             let bbox = self.unletterbox_bbox(&raw_bbox, &info);
 
             let class_id = chunk[5] as usize;
-            let class_label = self.classes
-                .get(class_id)
-                .cloned()
+            let class_label = self.classes.get(class_id).cloned()
                 .unwrap_or_else(|| format!("class_{}", class_id));
 
-            detections.push(Detection { bbox, score, class_id, class_label });
+            raw_detections.push(RawDetection { bbox, score, class_id, class_label });
         }
 
-        let detections = self.filter_detections(detections);
-        Ok(Detections { detections })
+        let raw_detections = self.filter_detections(raw_detections);
+
+        // --- Conversion vers le type métier utilisé dans le reste du pipeline ---
+        let img_shape = (info.original_height as usize, info.original_width as usize);
+
+        let detections: Vec<BigDetection> = raw_detections
+            .into_iter()
+            .filter_map(|raw| {
+                // Si le label ne correspond à aucune DetectionClass connue, on ignore
+                // silencieusement cette détection plutôt que de faire planter tout le batch.
+                let categorie = DetectionClass::from_str(&raw.class_label).ok()?;
+
+                let bbox = BBox::new(raw.bbox.x1, raw.bbox.y1, raw.bbox.x2, raw.bbox.y2, img_shape);
+
+                let cropped = crop_mat(
+                    &source_image,
+                    (raw.bbox.x1 as i32, raw.bbox.y1 as i32, raw.bbox.x2 as i32, raw.bbox.y2 as i32),
+                ).ok()?;
+
+                let mut mask = Mask::new();
+                mask.setup_mat(cropped);
+
+                // base_name reste vide ici : cette info (Store_point/Shelf_number) est
+                // calculée plus haut dans le pipeline Python, pas disponible à ce niveau.
+                let mut detection = BigDetection::new(categorie, bbox, mask, String::new());
+                detection.set_prediction(raw.score, raw.class_label);
+
+                Some(detection)
+            })
+            .collect();
+
+        Ok(detections)
+    }
+
+    fn unload(&mut self) {
+        self.session = None;
     }
 }
