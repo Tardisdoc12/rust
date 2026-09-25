@@ -84,9 +84,9 @@ pub fn workflows(
         PipelineStep::Single(
             get_real_size_of_objects()
         ),
-        PipelineStep::Single(
-            get_real_label_of_objects()
-        ),
+        // PipelineStep::Single(
+        //     get_real_label_of_objects()
+        // ),
     ];
 
     let input_data = PipelineData::Image(Arc::new(image_rust));
@@ -146,7 +146,7 @@ fn get_detections_from_image(
                 let mut best_detection = None;
 
                 new_results.iter().for_each(|new_detection| {
-                    if new_detection.categorie != DetectionClass::Etiquette {
+                    if new_detection.categorie != DetectionClass::Price {
                         return;
                     }
                     if new_detection.score > best_score {
@@ -160,7 +160,7 @@ fn get_detections_from_image(
                     let (px1, py1, _, _) = detection.bbox.xyxy();
 
                     best.bbox = best.bbox.translate(px1, py1, img_shape);
-                    best.categorie = DetectionClass::OtherEtiquette;
+                    best.categorie = DetectionClass::Price;
 
                     nouvelles_detections.push(best);
                 }
@@ -347,7 +347,7 @@ fn compare_ocr_cnn_price(
 
         vec_detections.iter_mut().for_each(|detection| {
             match detection.categorie {
-                DetectionClass::OtherEtiquette => {
+                DetectionClass::Price => {
                     // Pas de localisation : on OCR directement toute l'image,
                     // comme le box=[0,0,w,h] du Python
                     let price_str = compute_price_on_crop(

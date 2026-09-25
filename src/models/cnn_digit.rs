@@ -189,11 +189,6 @@ impl ModelPipeline for CNNDigit {
             outputs[0]
                 .try_extract_tensor::<f32>()?;
 
-        println!(
-            "CNN output shape = {:?}",
-            output.0
-        );
-
         Ok(output.1.to_vec())
     }
 
