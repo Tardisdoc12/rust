@@ -10,6 +10,7 @@ use opencv::prelude::*;
 use opencv::imgproc;
 
 use crate::detections::mask::Mask;
+use crate::functions_::setup_model_avec_cache::setup_model_avec_cache;
 
 //--------------------------------------------------------------------------------------------------
 
@@ -49,20 +50,8 @@ impl Sam2Processor {
     }
 
     pub fn setup_model(&mut self, encoder_path: &str, decoder_path: &str, device: &str) -> anyhow::Result<()> {
-        let build_session = |path: &str| -> anyhow::Result<Session> {
-            let mut builder = Session::builder()
-                .map_err(|e| anyhow::anyhow!("Erreur builder : {}", e))?;
-            if device.eq_ignore_ascii_case("cuda") {
-                builder = builder
-                    .with_execution_providers([CUDA::default().build()])
-                    .map_err(|e| anyhow::anyhow!("Erreur config CUDA : {}", e))?;
-            }
-            builder.commit_from_file(path)
-                .map_err(|e| anyhow::anyhow!("Erreur chargement '{}': {}", path, e))
-        };
-
-        self.encoder = Some(build_session(encoder_path)?);
-        self.decoder = Some(build_session(decoder_path)?);
+        self.encoder = Some(setup_model_avec_cache(encoder_path, device)?);
+        self.decoder = Some(setup_model_avec_cache(decoder_path, device)?);
         Ok(())
     }
 

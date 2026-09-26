@@ -24,6 +24,7 @@ use detections::mask::Mask;
 use bindings::pycnndigit::PyCNNDigit;
 use bindings::pyyolo26::PyYolo26;
 use bindings::pysam2::PySam2Processor;
+use bindings::pydetectionpipeline::PyDetectionPipeline;
 use pipeline::workflow;
 
 
@@ -37,6 +38,7 @@ fn rust(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DetectionClass>()?;
     m.add_class::<BBox>()?;
     m.add_class::<Mask>()?;
+    m.add_class::<PyDetectionPipeline>()?;
     m.add_function(wrap_pyfunction!(crate::pipeline::workflow::workflows, m)?)?;
     Ok(())
 }

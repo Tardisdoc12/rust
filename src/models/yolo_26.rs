@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 use ort::session::Session;
 use ort::ep::cuda::CUDA;
+use ort::ep::tensorrt::TensorRT;
 use opencv::core::Mat;
 use opencv::prelude::*;
 use opencv::imgproc;
@@ -19,6 +20,8 @@ use crate::detections::bbox::BBox;
 use crate::detections::mask::Mask;
 use crate::detections::detection_class::DetectionClass;
 use crate::models::model_core::ModelPipeline;
+use crate::functions_::setup_model_avec_cache::setup_model_avec_cache;
+
 
 //--------------------------------------------------------------------------------------------------
 
@@ -248,30 +251,7 @@ impl ModelPipeline for YOLO26 {
         model_path: &str,
         device: &str,
     ) -> anyhow::Result<()> {
-        let mut builder = Session::builder()
-            .map_err(|e| anyhow::anyhow!(
-                "Erreur création du builder : {}",
-                e
-            ))?;
-
-        if device.eq_ignore_ascii_case("cuda") {
-            builder = builder
-                .with_execution_providers([
-                    CUDA::default().build()
-                ])
-                .map_err(|e| anyhow::anyhow!(
-                    "Erreur configuration CUDA : {}",
-                    e
-                ))?;
-        }
-
-        let session = builder
-            .commit_from_file(model_path)
-            .map_err(|e| anyhow::anyhow!(
-                "Erreur chargement modèle '{}': {}",
-                model_path,
-                e
-            ))?;
+        let session = setup_model_avec_cache(model_path, device)?;
 
         /*
         * Ultralytics exporte les noms de classes

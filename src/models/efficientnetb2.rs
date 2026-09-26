@@ -5,12 +5,12 @@
 //--------------------------------------------------------------------------------------------------
 
 use ort::session::Session;
-use ort::ep::cuda::CUDA;
 use opencv::core::Mat;
 use opencv::prelude::*;
 use opencv::imgproc;
 
 use crate::models::model_core::ModelPipeline;
+use crate::functions_::setup_model_avec_cache::setup_model_avec_cache;
 
 //--------------------------------------------------------------------------------------------------
 
@@ -48,18 +48,7 @@ impl ModelPipeline for EfficientNetB2 {
     type Output = ClassificationResult;
 
     fn setup_model(&mut self, model_path: &str, device: &str) -> anyhow::Result<()> {
-        let mut builder = Session::builder()
-            .map_err(|e| anyhow::anyhow!("Erreur création du builder : {}", e))?;
-
-        if device == "cuda" {
-            builder = builder
-                .with_execution_providers([CUDA::default().build()])
-                .map_err(|e| anyhow::anyhow!("Erreur config CUDA : {}", e))?;
-        }
-
-        let session = builder
-            .commit_from_file(model_path)
-            .map_err(|e| anyhow::anyhow!("Erreur chargement modèle : {}", e))?;
+        let session = setup_model_avec_cache(model_path, device)?;
 
         let (classes_str, temp_str) = {
             let metadata = session.metadata()?;
