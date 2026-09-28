@@ -57,6 +57,7 @@ fn cluster_indices_1d(values: &[f32], thresh: f32) -> Vec<Vec<usize>> {
     clusters
 }
 
+//--------------------------------------------------------------------------------------------------
 /// Calcule les bornes de rangées à partir des Y des étiquettes uniquement.
 /// Équivalent de `row_clusters` : représentant = Y au plus petit index original
 /// du cluster, +0 inséré au début, trié croissant.
@@ -75,6 +76,7 @@ pub fn compute_shelf_boundaries(label_ys: &[f32], thresh: f32) -> Vec<f32> {
     boundaries
 }
 
+//--------------------------------------------------------------------------------------------------
 /// Équivalent de np.digitize(y, boundaries) avec bornes croissantes :
 /// renvoie le nombre de bornes <= y, ce qui donne directement le
 /// numéro de rangée en base 1 (rangée 0 = au-dessus de la 1ère étiquette).
@@ -82,6 +84,7 @@ pub fn shelf_position_for(y: f32, boundaries: &[f32]) -> usize {
     boundaries.iter().filter(|&&b| b <= y).count()
 }
 
+//--------------------------------------------------------------------------------------------------
 /// Assigne shelf_position à toutes les détections qui ne sont pas des étiquettes,
 /// en se basant sur le clustering des Y des étiquettes.
 /// `is_label` : closure qui identifie une étiquette parmi vos détections.
@@ -100,6 +103,7 @@ pub fn assign_shelf_positions(detections: &mut [Detection], thresh: f32) {
         }
     }
 }
+
 //--------------------------------------------------------------------------------------------------
 
 pub fn set_all_position(detections: &mut Vec<Detection>) {
