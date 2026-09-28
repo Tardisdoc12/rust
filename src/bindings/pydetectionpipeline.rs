@@ -141,6 +141,16 @@ impl PyDetectionPipeline {
         })
     }
 
+    fn unload(&self) {
+        let _ = self.processor_yolo.lock().map(|mut p| p.unload());
+        let _ = self.processor_yolo_price_tag.lock().map(|mut p| p.unload());
+        let _ = self.processor_inception.lock().map(|mut p| p.unload());
+        let _ = self.processor_efficientnet.lock().map(|mut p| p.unload());
+        let _ = self.processor_yolo_ocr.lock().map(|mut p| p.unload());
+        let _ = self.processor_cnn_digit.lock().map(|mut p| p.unload());
+        let _ = self.sam2_processor.lock().map(|mut p| p.unload());
+    }
+
     /// Traite une image. Les modèles déjà chargés sont réutilisés — appelez
     /// cette méthode autant de fois que nécessaire sur le même objet.
     fn process(&self, image: PyReadonlyArray3<'_, u8>) -> PyResult<Vec<Detection>> {
