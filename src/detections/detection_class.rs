@@ -11,6 +11,20 @@ pub enum DetectionClass {
     Price
 }
 
+#[pymethods]
+impl DetectionClass {
+    fn __str__(&self) -> &'static str {
+        match self {
+            DetectionClass::Reference => "reference",
+            DetectionClass::Produit   => "Product",
+            DetectionClass::Etiquette => "etiquette",
+            DetectionClass::Publicity => "publicity",
+            DetectionClass::Price     => "Price",
+            DetectionClass::NoProduct => "NoProduct",
+        }
+    }
+}
+
 impl std::fmt::Display for DetectionClass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
