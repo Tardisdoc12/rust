@@ -10,6 +10,7 @@ use pyo3::exceptions::PyRuntimeError;
 use numpy::PyReadonlyArray3;
 use opencv::core::{Mat, Rect};
 use opencv::prelude::MatTraitConst;
+use tracing_subscriber::EnvFilter;
 
 use crate::processor::processor::Processor;
 use crate::models::model_core::ModelPipeline;
@@ -93,9 +94,9 @@ impl PyDetectionPipeline {
     ) -> PyResult<Self> {
         // Chargement des 8 modèles EN PARALLÈLE (fichiers et sessions ONNX
         // indépendants, aucune synchronisation nécessaire entre eux).
-        tracing_subscriber::fmt()
-            .with_env_filter("ort=trace")
-            .init();
+        let filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("ort=warn"));
+        let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
         let result: anyhow::Result<_> = thread::scope(|scope| {
             let h_yolo = scope.spawn(|| Processor::new(YOLO26::new(), yolo_26_path, device));
             let h_yolo_pt = scope.spawn(|| Processor::new(YOLO26::new(), yolo_26_price_tag_path, device));
