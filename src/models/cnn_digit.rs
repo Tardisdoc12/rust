@@ -76,6 +76,7 @@ impl ModelPipeline for CNNDigit {
             &resized,
             &mut rgb,
             imgproc::COLOR_BGR2RGB,
+            0,
         )?;
 
         let data = rgb.data_bytes()?;
