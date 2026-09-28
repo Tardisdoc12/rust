@@ -7,8 +7,6 @@
 use std::sync::Mutex;
 
 use ort::session::Session;
-use ort::ep::cuda::CUDA;
-use ort::ep::tensorrt::TensorRT;
 use opencv::core::Mat;
 use opencv::prelude::*;
 use opencv::imgproc;
@@ -40,7 +38,6 @@ struct BoundingBox {  // plus de `pub`
 struct RawDetection {  // renommé, plus de `pub`, purement interne
     bbox: BoundingBox,
     score: f32,
-    class_id: usize,
     class_label: String,
 }
 
@@ -370,7 +367,7 @@ impl ModelPipeline for YOLO26 {
             let class_label = self.classes.get(class_id).cloned()
                 .unwrap_or_else(|| format!("class_{}", class_id));
 
-            raw_detections.push(RawDetection { bbox, score, class_id, class_label });
+            raw_detections.push(RawDetection { bbox, score, class_label });
         }
 
         let raw_detections = self.filter_detections(raw_detections);

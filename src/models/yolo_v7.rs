@@ -8,7 +8,6 @@ use opencv::core::Mat;
 use opencv::prelude::*;
 use opencv::imgproc;
 use ort::session::Session;
-use ort::ep::cuda::CUDA;
 
 use crate::functions_::functions_ocr::{extract_price, PriceResult, BoundingBox, Detection};
 use std::cell::RefCell;
@@ -272,7 +271,6 @@ impl ModelPipeline for Yolov7PriceTag {
                 Detection {
                     bbox,
                     score,
-                    class_id,
                     class_label,
                 }
             );

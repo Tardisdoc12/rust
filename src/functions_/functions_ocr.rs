@@ -36,7 +36,6 @@ pub struct BoundingBox {
 pub struct Detection {
     pub bbox: BoundingBox,
     pub score: f32,
-    pub class_id: usize,
     pub class_label: String,
 }
 
@@ -225,7 +224,6 @@ pub fn group_to_price_str(mut group: Vec<Detection>) -> String {
                 y2: mid_y + 1.0,
             },
             score: 0.90,
-            class_id: usize::MAX, // sentinelle, non utilisé pour l'affichage
             class_label: "virgule".to_string(),
         };
 
@@ -263,7 +261,6 @@ fn group_to_string(group: &[Detection]) -> String {
 
 pub struct PriceResult {
     pub detections: Vec<Detection>,
-    pub price_str: String,
 }
 
 pub fn extract_price(raw_detections: Vec<Detection>) -> PriceResult {
@@ -281,14 +278,7 @@ pub fn extract_price(raw_detections: Vec<Detection>) -> PriceResult {
         best_group.remove(0);
     }
 
-    let price_str = if !best_group.is_empty() {
-        group_to_price_str(best_group.clone())
-    } else {
-        String::new()
-    };
-
     PriceResult {
         detections: best_group,
-        price_str,
     }
 }

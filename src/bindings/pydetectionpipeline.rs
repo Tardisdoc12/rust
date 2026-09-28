@@ -1,26 +1,5 @@
 //--------------------------------------------------------------------------------------------------
 // Filename: bindings/pydetectionpipeline.rs
-//
-// Nouveau binding pyo3, à ajouter à côté de pyyolo26.rs / pysam2.rs /
-// pycnndigit.rs. Expose une classe Python `DetectionPipeline` qui charge les
-// 8 modèles UNE SEULE FOIS (en parallèle), puis traite autant d'images que
-// nécessaire via `.process(image)` sans recharger quoi que ce soit.
-//
-// IMPORTANT — correction par rapport à une version précédente que je vous
-// avais proposée : YOLO26 stocke `letterbox_info` et `source_image` dans des
-// champs internes partagés (Mutex<Option<...>>) utilisés pour faire
-// transiter de l'état entre preprocess() -> infer() -> postprocess(). Appeler
-// `.process()` en concurrence sur LA MÊME instance YOLO26 depuis plusieurs
-// threads corromprait cet état (un thread pourrait lire le letterbox_info
-// d'un autre). Solution : on verrouille l'appel COMPLET à `.process()` par
-// modèle via un Mutex<Processor<M>>, pas seulement l'inférence. Deux
-// détections utilisant des MODÈLES DIFFÉRENTS restent parallélisables entre
-// elles (ex: classification Produit pendant qu'un autre thread fait de
-// l'OCR de prix) ; deux détections utilisant le MÊME modèle se sérialisent
-// (comportement sûr, pas de perte de correction).
-//
-// Aucune modification requise dans model_core.rs, processor.rs, ni dans les
-// fichiers de modèles existants.
 //--------------------------------------------------------------------------------------------------
 
 use std::sync::Mutex;
@@ -31,7 +10,6 @@ use pyo3::exceptions::PyRuntimeError;
 use numpy::PyReadonlyArray3;
 use opencv::core::{Mat, Rect};
 use opencv::prelude::MatTraitConst;
-use rayon::prelude::*;
 
 use crate::processor::processor::Processor;
 use crate::models::model_core::ModelPipeline;
@@ -48,7 +26,6 @@ use crate::functions_::functions_ocr::{
     Detection as OcrDetection, BoundingBox, PriceResult, group_to_price_str,
 };
 use crate::functions_::utils::{safe_float, clean_double_dot, clean_thousand_dot};
-// Fonction déjà existante dans workflow.rs, réutilisée telle quelle (pub fn).
 use crate::pipeline::workflow::compute_homography_from_reference;
 
 //--------------------------------------------------------------------------------------------------
@@ -84,6 +61,8 @@ fn crop_from_bbox(mat: &Mat, bbox: &BoundingBox) -> anyhow::Result<Mat> {
     let roi = Mat::roi(mat, rect)?;
     roi.try_clone().map_err(Into::into)
 }
+
+const REFERENCE_REAL_CM: f32 = 10.0;
 
 //--------------------------------------------------------------------------------------------------
 
@@ -173,98 +152,59 @@ impl PyDetectionPipeline {
         let mut vec_detections = process_locked(&self.processor_yolo, &image_rust.mat)
             .map_err(to_py_err)?;
 
-        // Sous-détection des étiquettes de prix dans les publicités.
-        // Reste en boucle simple : toutes les publicités partagent le même
-        // processor_yolo_price_tag, donc des appels concurrents se
-        // sérialiseraient de toute façon sur son Mutex — aucune perte réelle.
-        let mut nouvelles_detections = Vec::new();
-        for detection in vec_detections.iter().filter(|d| d.categorie == DetectionClass::Publicity) {
-            let new_results = match process_locked(&self.processor_yolo_price_tag, &detection.mask.mat) {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-
-            if let Some(mut best) = new_results
-                .into_iter()
-                .filter(|d| d.categorie == DetectionClass::Price)
-                .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap())
-            {
-                let (px1, py1, _, _) = detection.bbox.xyxy();
-                best.bbox = best.bbox.translate(px1, py1, img_shape);
-                best.categorie = DetectionClass::Price;
-                nouvelles_detections.push(best);
-            }
-        }
-        vec_detections.extend(nouvelles_detections);
-
-        // --- Étapes 2+3 fusionnées : classification (Produit) et OCR prix
-        //     (Price/Etiquette) en UNE SEULE boucle, dispatchée par
-        //     catégorie et parallélisée avec rayon. Deux détections de
-        //     catégories différentes n'utilisent jamais les mêmes modèles
-        //     donc jamais le même Mutex -> vrai parallélisme entre elles.
-        vec_detections = vec_detections
-            .into_par_iter()
-            .map(|mut detection| {
-                match detection.categorie {
-                    DetectionClass::Produit => self.classify_produit(&mut detection),
-                    DetectionClass::Price | DetectionClass::Etiquette => self.price_from_detection(&mut detection),
-                    _ => {}
-                }
-                detection
-            })
-            .collect();
-
-        // --- Étape 4 : SAM2 (état mutable par image -> intrinsèquement
-        //     séquentiel : set_image doit précéder tous les predict_box).
-        {
-            let mut sam2 = self.sam2_processor.lock().map_err(|_| PyRuntimeError::new_err("Mutex SAM2 empoisonné"))?;
-            sam2.set_image(&image_rust.mat).map_err(to_py_err)?;
-
-            for detection in vec_detections.iter_mut() {
-                if matches!(detection.categorie, DetectionClass::Produit | DetectionClass::Reference) {
-                    if let Ok(mask) = sam2.predict_box(detection.bbox.xyxyn()) {
-                        detection.mask._mat_bin = mask._mat_bin;
-                    }
+        let mut homography: Option<Mat> = None;
+        for detection in vec_detections.iter_mut() {
+            if detection.categorie == DetectionClass::Reference {
+                if let Ok(Some((h, _cm_per_pixel))) = self.classify_reference(detection) {
+                    homography = Some(h);
                 }
             }
         }
 
-        // --- Étape 5 : taille réelle des objets (pas de modèle ML, rapide)
-        let max_ref = vec_detections
-            .iter()
-            .filter(|d| d.categorie == DetectionClass::Reference)
-            .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap())
-            .cloned();
-
-        if let Some(ref_detection) = max_ref {
-            if let Ok(Some((h, _cm_per_pixel))) = compute_homography_from_reference(&ref_detection.mask, 10.0) {
-                vec_detections.iter_mut().for_each(|detection| {
-                    if detection.categorie != DetectionClass::Produit { return; }
-                    if let Ok((width_cm, height_cm)) = detection.get_real_size_from_homography(&h) {
-                        detection.set_size(width_cm, height_cm);
+        let mut new_etiquettes: Vec<Detection> = Vec::new();
+        for detection in vec_detections.iter_mut() {
+            match detection.categorie {
+                DetectionClass::Produit => {
+                    self.classify_produit(detection, homography.as_ref());
+                }
+                DetectionClass::Etiquette => {
+                    self.classify_etiquette(detection);
+                }
+                DetectionClass::Publicity => {
+                    if let Ok(Some(etiquette)) = self.classify_publicity(detection, img_shape) {
+                        new_etiquettes.push(etiquette);
                     }
-                });
+                }
+                _ => {}
             }
         }
 
+        vec_detections.extend(new_etiquettes);
         Ok(vec_detections)
     }
 }
 
 // Méthodes internes (pas exposées à Python) : dispatch par catégorie.
 impl PyDetectionPipeline {
-    fn classify_produit(&self, detection: &mut Detection) {
-        let result_inception = match process_locked(&self.processor_inception, &detection.mask.mat) {
-            Ok(r) => r,
-            Err(_) => return,
-        };
-        let result_efficient = match process_locked(&self.processor_efficientnet, &detection.mask.mat) {
-            Ok(r) => r,
-            Err(_) => return,
-        };
+    fn predict_mask(&self, bbox: (f32, f32, f32, f32)) -> anyhow::Result<Mask> {
+        self.sam2_processor
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Mutex SAM2 empoisonné"))?
+            .predict_box(bbox)
+    }
 
-        let (label_inception, score_inception) = (result_inception.class_label, result_inception.score);
-        let (label_efficient, score_efficient) = (result_efficient.class_label, result_efficient.score);
+    fn classify_produit(&self, detection: &mut Detection, h: Option<&Mat>) {
+        let Ok(result_inception) = process_locked(&self.processor_inception, &detection.mask.mat) else { return };
+        let Ok(result_efficient) = process_locked(&self.processor_efficientnet, &detection.mask.mat) else { return };
+        let Ok(mask) = self.predict_mask(detection.bbox.xyxyn()) else { return };
+
+        detection.mask._mat_bin = mask._mat_bin;
+
+        let label_inception = result_inception.class_label;
+        let score_inception = result_inception.score;
+        let label_efficient = result_efficient.class_label;
+        let score_efficient = result_efficient.score;
+        let energy_efficient = result_efficient.energy;
 
         if score_inception >= 0.996 {
             detection.label = label_inception;
@@ -275,52 +215,89 @@ impl PyDetectionPipeline {
         } else {
             detection.label = "OOD".to_string();
             detection.score = 0.0;
+            if energy_efficient < -5.0 && score_efficient > 0.5 {
+                detection.label = label_efficient;
+                detection.score = score_efficient;
+            }
+        }
+
+        // Taille réelle : seulement si on a une homographie
+        if let Some(h) = h {
+            if let Ok((width_cm, height_cm)) = detection.get_real_size_from_homography(h) {
+                detection.set_size(width_cm, height_cm);
+            }
         }
     }
 
-    fn price_from_detection(&self, detection: &mut Detection) {
-        match detection.categorie {
-            DetectionClass::Price => {
-                let price_str = self.compute_price_on_crop(&detection.mask.mat);
-                detection.price = safe_float(&price_str);
-                detection.categorie = DetectionClass::Etiquette;
-            }
-            DetectionClass::Etiquette => {
-                let candidate_boxes = match process_locked(&self.processor_yolo_price_tag, &detection.mask.mat) {
-                    Ok(r) => r,
-                    Err(_) => return,
-                };
+    fn classify_etiquette(&self, detection: &mut Detection) {
+        let Ok(candidate_boxes) = process_locked(&self.processor_yolo_price_tag, &detection.mask.mat) else { return };
 
-                let crops: Vec<Mat> = if candidate_boxes.is_empty() {
-                    detection.mask.mat.try_clone().ok().into_iter().collect()
-                } else {
-                    candidate_boxes
-                        .iter()
-                        .filter_map(|b| {
-                            let (x1, y1, x2, y2) = b.bbox.xyxy();
-                            detection.mask.get_subpart_mat((x1 as i32, y1 as i32, x2 as i32, y2 as i32)).ok()
-                        })
-                        .collect()
-                };
-
-                // Pas de rayon ici : tous les crops appelleraient les MÊMES
-                // processor_yolo_ocr / processor_cnn_digit et se
-                // sérialiseraient de toute façon sur leurs Mutex.
-                let mut best_price_str = String::new();
-                let mut best_price_val = f32::MIN;
-                for crop in &crops {
-                    let price_str = self.compute_price_on_crop(crop);
-                    let value = safe_float(&price_str);
-                    if value > best_price_val {
-                        best_price_val = value;
-                        best_price_str = price_str;
-                    }
-                }
-                detection.price = safe_float(&best_price_str);
+        let crops: Vec<Mat> = if candidate_boxes.is_empty() {
+            match detection.mask.mat.try_clone() {
+                Ok(m) => vec![m],
+                Err(_) => return,
             }
-            _ => {}
+        } else {
+            candidate_boxes
+                .iter()
+                .filter_map(|b| {
+                    let (x1, y1, x2, y2) = b.bbox.xyxy();
+                    detection
+                        .mask
+                        .get_subpart_mat((x1 as i32, y1 as i32, x2 as i32, y2 as i32))
+                        .ok()
+                })
+                .collect()
+        };
+
+        let mut best_price_str = String::new();
+        let mut best_price_val = f32::MIN;
+
+        for crop in &crops {
+            let price_str = self.compute_price_on_crop(crop);
+            let value = safe_float(&price_str);
+            if value > best_price_val {
+                best_price_val = value;
+                best_price_str = price_str;
+            }
         }
+
+        detection.price = safe_float(&best_price_str);
     }
+
+    /// Renvoie l'étiquette (prix) trouvée dans la publicité, si elle existe.
+    fn classify_publicity(
+        &self,
+        detection: &Detection,
+        img_shape: (usize, usize),
+    ) -> anyhow::Result<Option<Detection>> {
+        let Ok(new_results) = process_locked(&self.processor_yolo_price_tag, &detection.mask.mat) else {
+            return Ok(None);
+        };
+
+        let best_detection = new_results
+            .iter()
+            .filter(|d| d.categorie == DetectionClass::Price)
+            .max_by(|a, b| a.score.total_cmp(&b.score))
+            .cloned();
+
+        let Some(mut best) = best_detection else { return Ok(None) };
+
+        // offset du crop publicity dans l'image complète
+        let (px1, py1, _, _) = detection.bbox.xyxy();
+        best.bbox = best.bbox.translate(px1, py1, img_shape);
+        best.categorie = DetectionClass::Etiquette;
+
+        self.classify_etiquette(&mut best);
+        Ok(Some(best))
+    }
+
+    fn classify_reference(&self, detection: &mut Detection) -> anyhow::Result<Option<(Mat, f32)>> {
+        let mask = self.predict_mask(detection.bbox.xyxyn())?;
+        detection.mask._mat_bin = mask._mat_bin;
+        compute_homography_from_reference(&detection.mask, REFERENCE_REAL_CM)
+    }
+
 
     fn compute_price_on_crop(&self, crop: &Mat) -> String {
         let price_result: PriceResult = match process_locked(&self.processor_yolo_ocr, crop) {

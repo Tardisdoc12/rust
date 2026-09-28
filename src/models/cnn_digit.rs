@@ -21,8 +21,7 @@ pub struct DigitResult {
 }
 
 pub struct CNNDigit {
-    session: Option<Session>,
-    classes: Vec<String>,
+    session: Option<Session>
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -31,7 +30,6 @@ impl CNNDigit {
     pub fn new() -> Self {
         CNNDigit {
             session: None,
-            classes: (0..10).map(|i| i.to_string()).collect(),
         }
     }
 }

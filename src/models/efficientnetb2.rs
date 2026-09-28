@@ -22,6 +22,7 @@ const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 pub struct ClassificationResult {
     pub class_label: String,
     pub score: f32,
+    pub energy: f32,
 }
 
 pub struct EfficientNetB2 {
@@ -39,6 +40,16 @@ impl EfficientNetB2 {
             classes: Vec::new(),
             temperature: 1.0,
         }
+    }
+
+    fn energy_score(logits: &[f32], temperature: f32) -> f32 {
+        let scaled: Vec<f32> = logits.iter().map(|&x| x / temperature).collect();
+
+        let max = scaled.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let sum_exp: f32 = scaled.iter().map(|&x| (x - max).exp()).sum();
+        let logsumexp = max + sum_exp.ln();
+
+        -temperature * logsumexp
     }
 }
 
@@ -61,7 +72,7 @@ impl ModelPipeline for EfficientNetB2 {
 
         self.classes = serde_json::from_str(&classes_str)?;
         self.temperature = temp_str.parse::<f32>()
-            .unwrap_or(1.0); // fallback si parsing échoue
+            .unwrap_or(1.0);
 
         self.session = Some(session);
         Ok(())
@@ -119,8 +130,8 @@ impl ModelPipeline for EfficientNetB2 {
         Ok(output_tensor.1.to_vec())
     }
 
-        fn postprocess(&self, raw_output: &[f32]) -> anyhow::Result<Self::Output> {
-        // division par la température AVANT le softmax
+    fn postprocess(&self, raw_output: &[f32]) -> anyhow::Result<Self::Output> {
+        
         let scaled_logits: Vec<f32> = raw_output.iter()
             .map(|&x| x / self.temperature)
             .collect();
@@ -138,7 +149,9 @@ impl ModelPipeline for EfficientNetB2 {
             .cloned()
             .unwrap_or_else(|| class_idx.to_string());
 
-        Ok(ClassificationResult { class_label, score })
+        let energy = Self::energy_score(raw_output, self.temperature);
+
+        Ok(ClassificationResult { class_label, score, energy })
     }
 
     fn unload(&mut self) {

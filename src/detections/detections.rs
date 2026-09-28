@@ -45,9 +45,6 @@ pub struct Detection {
 //--------------------------------------------------------------------------------------------------
 
 impl Detection {
-    fn setup_mat(&mut self, mat: Mat) {
-        self.mask.setup_mat(mat);
-    }
 
     pub fn crop_mask(&self)-> anyhow::Result<Mat> {
         let (x1, y1, x2, y2) = self.bbox.xyxy();

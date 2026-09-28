@@ -4,7 +4,6 @@
 
 use ort::session::Session;
 use ort::value::Value;
-use ort::ep::cuda::CUDA;
 use opencv::core::Mat;
 use opencv::prelude::*;
 use opencv::imgproc;

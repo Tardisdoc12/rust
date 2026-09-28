@@ -7,7 +7,6 @@
 use std::sync::Arc;
 
 use pyo3::prelude::*;
-use numpy::PyArray3;
 use numpy::PyReadonlyArray3;
 use opencv::core::{Mat, Rect, Point2f, Vector};
 use opencv::prelude::MatTraitConst;
@@ -48,7 +47,7 @@ pub fn workflows(
 )-> PyResult<Vec<Detection>> {
 
     let mut image_rust = Mask::new();
-    image_rust.setup_from_python(image);
+    let _ = image_rust.setup_from_python(image);
 
     let vec: Vec<PipelineStep> = vec![
         PipelineStep::Single(
@@ -416,13 +415,13 @@ fn get_sam2(
     device: &str,
 )-> StepFn {
     let mut sam2_processor = Sam2Processor::new();
-    sam2_processor.setup_model(
+    let _ = sam2_processor.setup_model(
         sam2_path_encoder,
         sam2_path_decoder,
         device,
     );
 
-    sam2_processor.set_image(image);
+    let _ = sam2_processor.set_image(image);
 
     Box::new(move |input: PipelineData| {
         let PipelineData::Detections(detections) = input else {

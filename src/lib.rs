@@ -25,7 +25,6 @@ use bindings::pycnndigit::PyCNNDigit;
 use bindings::pyyolo26::PyYolo26;
 use bindings::pysam2::PySam2Processor;
 use bindings::pydetectionpipeline::PyDetectionPipeline;
-use pipeline::workflow;
 
 
 
