@@ -74,7 +74,7 @@ impl ModelPipeline for CNNDigit {
 
         imgproc::cvt_color(
             &resized,
-            $mut rgb,
+            &mut rgb,
             imgproc::COLOR_BGR2RGB,
         )?;
 
