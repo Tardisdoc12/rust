@@ -73,7 +73,6 @@ impl Sam2Processor {
         imgproc::cvt_color(
             image, &mut rgb,
             imgproc::COLOR_BGR2RGB, 0,
-            opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
         )?;
 
         // resize DIRECT vers 1024x1024, aspect ratio non conservé (conforme au Python)

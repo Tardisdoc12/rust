@@ -74,10 +74,8 @@ impl ModelPipeline for CNNDigit {
 
         imgproc::cvt_color(
             &resized,
-            &mut rgb,
+            $mut rgb,
             imgproc::COLOR_BGR2RGB,
-            0,
-            opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
         )?;
 
         let data = rgb.data_bytes()?;

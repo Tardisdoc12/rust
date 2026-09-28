@@ -90,7 +90,6 @@ impl ModelPipeline for EfficientNetB2 {
         imgproc::cvt_color(
             &resized, &mut rgb,
             imgproc::COLOR_BGR2RGB, 0,
-            opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
         )?;
 
         let data: &[u8] = rgb.data_bytes()?;

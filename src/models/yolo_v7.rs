@@ -151,7 +151,6 @@ impl ModelPipeline for Yolov7PriceTag {
         imgproc::cvt_color(
             &letterboxed, &mut rgb,
             imgproc::COLOR_BGR2RGB, 0,
-            opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
         )?;
 
         let data: &[u8] = rgb.data_bytes()?;
