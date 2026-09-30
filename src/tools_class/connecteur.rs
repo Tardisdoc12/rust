@@ -17,7 +17,7 @@ const GET_FAMILY_ID: &str = r#"
 //--------------------------------------------------------------------------------------------------
 
 const GET_SIZE_OF_PRODUCTS: &str = r#"
-    SELECT "id", "Ean", "Hauteur_du_produit", "Largeur_du_produit"
+    SELECT "id"::text, "Ean", "Hauteur_du_produit", "Largeur_du_produit"
     FROM "default$default"."MasterProduct"
     WHERE "family_id" = $1
 "#;
@@ -25,7 +25,7 @@ const GET_SIZE_OF_PRODUCTS: &str = r#"
 //--------------------------------------------------------------------------------------------------
 
 const GET_MASTER_PRODUCT: &str = r#"
-    SELECT "id" FROM "default$default"."MasterProduct"
+    SELECT "id"::text FROM "default$default"."MasterProduct"
     WHERE "Ean" = $1
 "#;
 
