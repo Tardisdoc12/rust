@@ -216,20 +216,24 @@ impl PyDetectionPipeline {
                     if let Some(idx) = nearest_object(&objects, detection.bbox.center_rel()) {
                         assignments.push((idx, detection.price));
                     }
-                    detection.master_product_id = resolver.get_master_product_id(&detection.label);
+                    detection.master_product_id = resolver.get_master_product_id(&detection.label)
+                    .expect("Failed to get master product ID");
                 }
                 DetectionClass::Publicity => {
-                    if let Ok(Some(etiquette)) = self.classify_publicity(detection, img_shape) {
+                    if let Ok(Some(mut etiquette)) = self.classify_publicity(detection, img_shape) {
                         if let Some(idx) = nearest_object(&objects, etiquette.bbox.center_rel()) {
                             assignments.push((idx, etiquette.price));
                         }
-                        etiquette.master_product_id = resolver.get_master_product_id(&etiquette.label);
+                        etiquette.master_product_id = resolver.get_master_product_id(&etiquette.label)
+                        .expect("Failed to get master product ID");
                         new_etiquettes.push(etiquette);
                     }
-                    detection.master_product_id = resolver.get_master_product_id(&detection.label);
+                    detection.master_product_id = resolver.get_master_product_id(&detection.label)
+                    .expect("Failed to get master product ID");
                 }
                 DetectionClass::NoProduct => {
-                    detection.master_product_id = resolver.get_master_product_id(&detection.label);
+                    detection.master_product_id = resolver.get_master_product_id(&detection.label)
+                    .expect("Failed to get master product ID");
                 }
                 _ => {}
             }

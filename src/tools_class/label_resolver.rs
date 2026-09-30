@@ -12,7 +12,7 @@ use crate::detections::detections::Detection;
 //--------------------------------------------------------------------------------------------------
 
 /// Connexion paresseuse + cache, durée de vie = un appel à `process`.
-struct LabelResolver {
+pub struct LabelResolver {
     conn: Option<ConnecteurServer>,
     connect_failed: bool,
     // label -> liste (ean, hauteur) ; None = famille inconnue
@@ -22,7 +22,7 @@ struct LabelResolver {
 //--------------------------------------------------------------------------------------------------
 
 impl LabelResolver {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self { conn: None, connect_failed: false, cache: HashMap::new() }
     }
 
@@ -55,7 +55,7 @@ impl LabelResolver {
         self.cache.get(label).and_then(|o| o.as_ref())
     }
 
-    fn resolve(&mut self, detection: &mut Detection) {
+    pub fn resolve(&mut self, detection: &mut Detection) {
         if detection.label.is_empty()
             || detection.label == "OOD"
             || detection.height_cm <= 0.0
@@ -75,14 +75,14 @@ impl LabelResolver {
         }
     }
 
-    fn master_product_id_for(&mut self, label: &str) -> &Vec<(String, f64, String)> {
+    fn master_product_id_for(&mut self, label: &str) ->  Option<&Vec<(String, f64, String)>> {
         if !self.cache.contains_key(label) {
             let fetched = self.conn().and_then(|c| {
                 let master_product_id = c.get_master_product(label).ok().flatten()?;
                 if master_product_id.is_empty() {
                     None
                 } else {
-                    Some((label.to_string(), 0, master_product_id))
+                    Some(Vec::from([(label.to_string(), 0.0 as f64, master_product_id)]))
                 }
             });
             self.cache.insert(label.to_string(), fetched);
@@ -90,10 +90,9 @@ impl LabelResolver {
         self.cache.get(label).and_then(|o| o.as_ref())
     }
 
-    fn get_master_product_id(&mut self, label: &str) -> Option<String> {
+   pub fn get_master_product_id(&mut self, label: &str) -> Option<String> {
         self.master_product_id_for(label)
-            .iter()
-            .find_map(|(_, _, master_product_id)| Some(master_product_id.clone()))
+            .and_then(|v| v.iter().find_map(|(_, _, master_product_id)| Some(master_product_id.clone())))
     }
 }
 
