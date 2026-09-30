@@ -6,14 +6,10 @@
 
 use std::collections::HashMap;
 
+use crate::tools_class::connecteur::ConnecteurServer;
+use crate::detections::detections::Detection;
+
 //--------------------------------------------------------------------------------------------------
-
-#[derive(Clone)]
-struct LabelInfo {
-    sizes: Vec<(String, f64, String)>,
-    master_product_id: Option<String>,
-}
-
 
 /// Connexion paresseuse + cache, durée de vie = un appel à `process`.
 struct LabelResolver {
