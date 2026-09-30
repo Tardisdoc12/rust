@@ -28,7 +28,7 @@ use crate::functions_::functions_ocr::{
 };
 use crate::functions_::utils::{safe_float, clean_double_dot, clean_thousand_dot, compute_homography_from_reference};
 use crate::functions_::positionnement::set_all_position;
-use crate::tools_class::connecteur::ConnecteurServer;
+use crate::tools_class::{connecteur::ConnecteurServer, label_resolver::LabelResolver};
 
 //--------------------------------------------------------------------------------------------------
 
@@ -176,21 +176,31 @@ impl PyDetectionPipeline {
         let mut vec_detections = process_locked(&self.processor_yolo, &image_rust.mat)
             .map_err(to_py_err)?;
 
+        let mut resolver = LabelResolver::new();
         let mut homography: Option<Mat> = None;
         let mut objects: Vec<(usize, (f32, f32))> = Vec::new();
         let mut number_etiquette: i8 = 0;
-        for detection in vec_detections.iter_mut() {
-            if detection.categorie == DetectionClass::Reference {
-                if let Ok(Some((h, _cm_per_pixel))) = self.classify_reference(detection) {
-                    homography = Some(h);
+
+        for (i, detection) in vec_detections.iter_mut().enumerate() {
+            match detection.categorie {
+                DetectionClass::Reference => {
+                    if let Ok(Some((h, _))) = self.classify_reference(detection) {
+                        homography = Some(h);
+                    }
                 }
+                DetectionClass::Etiquette => {
+                    number_etiquette += 1;
+                    detection.label = "PL".to_string();
+                }
+                DetectionClass::Publicity => {
+                    detection.label = "AD".to_string();
+                }
+                DetectionClass::NoProduct => {
+                    detection.label = "ES".to_string();
+                    objects.push((i, detection.bbox.center_rel()));
+                }
+                _ => objects.push((i, detection.bbox.center_rel())),
             }
-            if detection.categorie == DetectionClass::Etiquette {
-                number_etiquette += 1;
-            }
-            DetectionClass::Etiquette => number_etiquette += 1,
-            DetectionClass::Publicity => {}
-            _ => objects.push((i, detection.bbox.center_rel())),
         }
 
         let mut new_etiquettes: Vec<Detection> = Vec::new();
@@ -199,21 +209,27 @@ impl PyDetectionPipeline {
             match detection.categorie {
                 DetectionClass::Produit => {
                     self.classify_produit(detection, homography.as_ref());
-                    self.get_real_label(detection);
+                    resolver.resolve(detection);
                 }
                 DetectionClass::Etiquette => {
                     self.classify_etiquette(detection);
                     if let Some(idx) = nearest_object(&objects, detection.bbox.center_rel()) {
                         assignments.push((idx, detection.price));
                     }
+                    detection.master_product_id = resolver.get_master_product_id(&detection.label);
                 }
                 DetectionClass::Publicity => {
                     if let Ok(Some(etiquette)) = self.classify_publicity(detection, img_shape) {
                         if let Some(idx) = nearest_object(&objects, etiquette.bbox.center_rel()) {
                             assignments.push((idx, etiquette.price));
                         }
+                        etiquette.master_product_id = resolver.get_master_product_id(&etiquette.label);
                         new_etiquettes.push(etiquette);
                     }
+                    detection.master_product_id = resolver.get_master_product_id(&detection.label);
+                }
+                DetectionClass::NoProduct => {
+                    detection.master_product_id = resolver.get_master_product_id(&detection.label);
                 }
                 _ => {}
             }
@@ -259,7 +275,7 @@ impl PyDetectionPipeline {
             detection.label = if score_efficient >= 0.23 { label_efficient } else { "OOD".to_string() };
             detection.score = score_efficient;
         } else {
-            detection.label = "OOD".to_string();
+            detection.label = "OOB".to_string();
             detection.score = 0.0;
             if energy_efficient < -5.0 && score_efficient > 0.5 {
                 detection.label = label_efficient;
@@ -372,36 +388,6 @@ impl PyDetectionPipeline {
         let price_str = group_to_price_str(corrected_group);
         let price_str = clean_double_dot(&price_str);
         clean_thousand_dot(&price_str)
-    }
-
-    fn get_real_label(&self, detection: &mut Detection) {
-        match ConnecteurServer::connect() {
-            Ok(mut connecteur) => {
-                let family_id = match connecteur.get_family_id(&detection.label) {
-                    Ok(Some(id)) => id,
-                    _ => return,
-                };
-
-                let size_info = match connecteur.get_size_of_products(family_id) {
-                    Ok(list) if !list.is_empty() => list,
-                    _ => return,
-                };
-
-                let height_computed = detection.height_cm as f64;
-                let mut distance_to_height = 100.0_f64;
-
-                for (ean, height, _largeur) in size_info {
-                    let distance = (height_computed - height).abs();
-                    if distance < distance_to_height {
-                        distance_to_height = distance;
-                        detection.label = ean;
-                    }
-                }
-            },
-            Err(e) => {
-                eprintln!("Erreur de connexion à la base : {e}");
-            }
-        }
     }
 }
 

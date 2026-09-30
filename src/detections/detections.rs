@@ -40,6 +40,8 @@ pub struct Detection {
     pub shelf_position: i32,
     #[pyo3(get, set)]
     pub position: i32,
+    #[pyo3(get, set)]
+    pub master_product_id: String,
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -108,6 +110,7 @@ impl Detection {
             width_cm: 0.0,
             height_cm: 0.0,
             shelf_position: 0,
+            master_product_id: "".to_string(),
             position: 0,
         }
     }
