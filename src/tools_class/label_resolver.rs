@@ -47,10 +47,7 @@ impl LabelResolver {
                 if list.is_empty() {
                     None
                 } else {
-                    Some(LabelInfo {
-                        sizes: list.into_iter().map(|(id, ean, h, _l)| (ean, h, id)).collect(),
-                        master_product_id: None,
-                    })
+                    Some(list.into_iter().map(|(id, ean, h, _l)| (ean, h, id)).collect())
                 }
             });
             self.cache.insert(label.to_string(), fetched);

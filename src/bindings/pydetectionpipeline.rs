@@ -28,7 +28,7 @@ use crate::functions_::functions_ocr::{
 };
 use crate::functions_::utils::{safe_float, clean_double_dot, clean_thousand_dot, compute_homography_from_reference};
 use crate::functions_::positionnement::set_all_position;
-use crate::tools_class::{connecteur::ConnecteurServer, label_resolver::LabelResolver};
+use crate::tools_class::label_resolver::LabelResolver;
 
 //--------------------------------------------------------------------------------------------------
 
