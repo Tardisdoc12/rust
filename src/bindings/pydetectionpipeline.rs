@@ -64,6 +64,18 @@ fn crop_from_bbox(mat: &Mat, bbox: &BoundingBox) -> anyhow::Result<Mat> {
     roi.try_clone().map_err(Into::into)
 }
 
+fn dist2(a: (f32, f32), b: (f32, f32)) -> f32 {
+    let (dx, dy) = (a.0 - b.0, a.1 - b.1);
+    dx * dx + dy * dy
+}
+
+fn nearest_object(objects: &[(usize, (f32, f32))], center: (f32, f32)) -> Option<usize> {
+    objects
+        .iter()
+        .min_by(|a, b| dist2(a.1, center).total_cmp(&dist2(b.1, center)))
+        .map(|&(i, _)| i)
+}
+
 const REFERENCE_REAL_CM: f32 = 10.0;
 
 //--------------------------------------------------------------------------------------------------
@@ -165,6 +177,7 @@ impl PyDetectionPipeline {
             .map_err(to_py_err)?;
 
         let mut homography: Option<Mat> = None;
+        let mut objects: Vec<(usize, (f32, f32))> = Vec::new();
         let mut number_etiquette: i8 = 0;
         for detection in vec_detections.iter_mut() {
             if detection.categorie == DetectionClass::Reference {
@@ -175,9 +188,13 @@ impl PyDetectionPipeline {
             if detection.categorie == DetectionClass::Etiquette {
                 number_etiquette += 1;
             }
+            DetectionClass::Etiquette => number_etiquette += 1,
+            DetectionClass::Publicity => {}
+            _ => objects.push((i, detection.bbox.center_rel())),
         }
 
         let mut new_etiquettes: Vec<Detection> = Vec::new();
+        let mut assignments: Vec<(usize, f32)> = Vec::new();
         for detection in vec_detections.iter_mut() {
             match detection.categorie {
                 DetectionClass::Produit => {
@@ -186,9 +203,15 @@ impl PyDetectionPipeline {
                 }
                 DetectionClass::Etiquette => {
                     self.classify_etiquette(detection);
+                    if let Some(idx) = nearest_object(&objects, detection.bbox.center_rel()) {
+                        assignments.push((idx, detection.price));
+                    }
                 }
                 DetectionClass::Publicity => {
                     if let Ok(Some(etiquette)) = self.classify_publicity(detection, img_shape) {
+                        if let Some(idx) = nearest_object(&objects, etiquette.bbox.center_rel()) {
+                            assignments.push((idx, etiquette.price));
+                        }
                         new_etiquettes.push(etiquette);
                     }
                 }
@@ -196,6 +219,9 @@ impl PyDetectionPipeline {
             }
         }
 
+        for (idx, price) in assignments {
+            vec_detections[idx].price = price;
+        }
         vec_detections.extend(new_etiquettes);
         if number_etiquette >= 2{
             set_all_position(&mut vec_detections);
