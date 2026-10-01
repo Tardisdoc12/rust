@@ -7,7 +7,6 @@
 use ort::session::Session;
 use opencv::core::Mat;
 use opencv::prelude::*;
-use opencv::imgproc;
 
 use crate::models::model_core::ModelPipeline;
 use crate::functions_::{setup_model_avec_cache::setup_model_avec_cache, letterbox::letterbox_rgb};

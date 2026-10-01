@@ -6,7 +6,6 @@
 
 use opencv::core::Mat;
 use opencv::prelude::*;
-use opencv::imgproc;
 use ort::session::Session;
 use ort::value::Value;
 
