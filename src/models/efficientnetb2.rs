@@ -10,10 +10,10 @@ use opencv::prelude::*;
 use opencv::imgproc;
 
 use crate::models::model_core::ModelPipeline;
-use crate::functions_::setup_model_avec_cache::setup_model_avec_cache;
+use crate::functions_::{setup_model_avec_cache::setup_model_avec_cache, letterbox::letterbox_rgb};
 
 //--------------------------------------------------------------------------------------------------
-
+const FILL_RGB: [u8; 3] = [0, 0, 0];
 const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
@@ -79,18 +79,7 @@ impl ModelPipeline for EfficientNetB2 {
     }
 
     fn preprocess(&self, image: &Mat) -> anyhow::Result<Vec<f32>> {
-        let mut resized = Mat::default();
-        imgproc::resize(
-            image, &mut resized,
-            opencv::core::Size::new(260, 260),
-            0.0, 0.0, imgproc::INTER_LINEAR,
-        )?;
-
-        let mut rgb = Mat::default();
-        imgproc::cvt_color(
-            &resized, &mut rgb,
-            imgproc::COLOR_BGR2RGB, 0,
-        )?;
+        let rgb = letterbox_rgb(image, 288, FILL_RGB)?;
 
         let data: &[u8] = rgb.data_bytes()?;
         let width = rgb.cols() as usize;

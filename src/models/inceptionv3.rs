@@ -11,7 +11,8 @@ use ort::session::Session;
 use ort::value::Value;
 
 use crate::models::model_core::ModelPipeline;
-use crate::functions_::setup_model_avec_cache::setup_model_avec_cache;
+use crate::functions_::{setup_model_avec_cache::setup_model_avec_cache, letterbox::letterbox_rgb};
+const FILL_RGB: [u8; 3] = [114, 114, 114];
 
 //--------------------------------------------------------------------------------------------------
 
@@ -20,19 +21,7 @@ const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
 fn preprocess(image: &Mat) -> anyhow::Result<Vec<f32>> {
     // 1. Resize à 299x299
-    let mut resized = Mat::default();
-    imgproc::resize(
-        image, &mut resized,
-        opencv::core::Size::new(299, 299),
-        0.0, 0.0, imgproc::INTER_LINEAR,
-    )?;
-
-    // 2. BGR -> RGB
-    let mut rgb = Mat::default();
-    imgproc::cvt_color(
-        &resized, &mut rgb,
-        imgproc::COLOR_BGR2RGB, 0,
-    )?;
+    let rgb = letterbox_rgb(image, 299, FILL_RGB)?;
 
     let data: &[u8] = rgb.data_bytes()?;
     let width = rgb.cols() as usize;
