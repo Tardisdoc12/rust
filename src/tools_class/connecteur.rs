@@ -42,7 +42,7 @@ impl ConnecteurServer {
         let identifiant = std::env::var("IDENTIFIANT")?;
         let password_db = std::env::var("PASSWORDDB")?;
         let database = std::env::var("DATABASE")?;
-        let hostname = std::env::var("HOSTNAME")?;
+        let hostname = std::env::var("DB_HOST")?;
         let port: u16 = std::env::var("PORT")
             .unwrap_or_else(|_| "5432".to_string())
             .parse()?;

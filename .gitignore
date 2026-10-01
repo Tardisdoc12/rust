@@ -8,3 +8,5 @@
 **/*.jpg
 **/*.lock
 *.lock
+model_onnx/
+output/

@@ -224,7 +224,7 @@ impl PyDetectionPipeline {
                         if let Some(idx) = nearest_object(&objects, etiquette.bbox.center_rel()) {
                             assignments.push((idx, etiquette.price));
                         }
-                        etiquette.label = "PL";
+                        etiquette.label = "PL".to_string();
                         etiquette.master_product_id = resolver.get_master_product_id(&etiquette.label)
                         .expect("Failed to get master product ID");
                         new_etiquettes.push(etiquette);
