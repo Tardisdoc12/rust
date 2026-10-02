@@ -173,6 +173,7 @@ impl PyDetectionPipeline {
         let img_shape = (image_rust.mat.rows() as usize, image_rust.mat.cols() as usize);
 
         // --- Étape 1 : détection principale
+        let _ = self.sam2_processor.lock().unwrap().set_image(&image_rust.mat);
         let mut vec_detections = process_locked(&self.processor_yolo, &image_rust.mat)
             .map_err(to_py_err)?;
 
