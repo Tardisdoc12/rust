@@ -110,7 +110,7 @@ impl ModelPipeline for EfficientNetB2 {
         let session = self.session.as_mut()
             .ok_or_else(|| anyhow::anyhow!("Modèle non chargé, appelle setup_model d'abord"))?;
 
-        let input_tensor = ort::value::Value::from_array(([1, 3, 260, 260], input.to_vec()))?;
+        let input_tensor = ort::value::Value::from_array(([1, 3, 288, 288], input.to_vec()))?;
         let outputs = session.run(ort::inputs!["input" => input_tensor])?;
 
         let output_tensor = outputs["output"].try_extract_tensor::<f32>()?;
