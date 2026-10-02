@@ -57,7 +57,7 @@ impl LabelResolver {
 
     pub fn resolve(&mut self, detection: &mut Detection) {
         if detection.label.is_empty()
-            || detection.label == "OOD"
+            || detection.label == "OOB"
             || detection.height_cm <= 0.0
         {
             return;

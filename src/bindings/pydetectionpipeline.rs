@@ -261,11 +261,14 @@ impl PyDetectionPipeline {
     }
 
     fn classify_produit(&self, detection: &mut Detection, h: Option<&Mat>) {
-        let Ok(result_inception) = process_locked(&self.processor_inception, &detection.mask.mat) else { return };
-        let Ok(result_efficient) = process_locked(&self.processor_efficientnet, &detection.mask.mat) else { return };
-        let Ok(mask) = self.predict_mask(detection.bbox.xyxyn()) else { return };
-
-        detection.mask._mat_bin = mask._mat_bin;
+       let result_inception = match process_locked(&self.processor_inception, &detection.mask.mat) {
+            Ok(r) => r,
+            Err(e) => { eprintln!("[produit] inception: {e:#}"); return; }
+        };
+        let result_efficient = match process_locked(&self.processor_efficientnet, &detection.mask.mat) {
+            Ok(r) => r,
+            Err(e) => { eprintln!("[produit] efficientnet: {e:#}"); return; }
+        };
 
         let label_inception = result_inception.class_label;
         let score_inception = result_inception.score;
@@ -277,7 +280,7 @@ impl PyDetectionPipeline {
             detection.label = label_inception;
             detection.score = score_inception;
         } else if score_inception >= 0.57 {
-            detection.label = if score_efficient >= 0.23 { label_efficient } else { "OOD".to_string() };
+            detection.label = if score_efficient >= 0.23 { label_efficient } else { "OOB".to_string() };
             detection.score = score_efficient;
         } else {
             detection.label = "OOB".to_string();
@@ -287,7 +290,10 @@ impl PyDetectionPipeline {
                 detection.score = score_efficient;
             }
         }
-
+        match self.predict_mask(detection.bbox.xyxyn()) {
+            Ok(mask) => detection.mask._mat_bin = mask._mat_bin,
+            Err(e) => eprintln!("[produit] sam2: {e:#}"),
+        }
         // Taille réelle : seulement si on a une homographie
         if let Some(h) = h {
             if let Ok((width_cm, height_cm)) = detection.get_real_size_from_homography(h) {
