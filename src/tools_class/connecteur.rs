@@ -64,11 +64,20 @@ impl ConnecteurServer {
 
     /// Équivalent de get_family_id
     pub fn get_family_id(&mut self, ref_master_product: &str) -> anyhow::Result<Option<i32>> {
-        let row = self
-            .client
-            .query_opt(GET_FAMILY_ID, &[&ref_master_product])?;
+        let row = self.client.query_opt(GET_FAMILY_ID, &[&ref_master_product])?;
+        let id: Option<i32> = match row {
+            Some(r) => r.try_get(0)?,
+            None => None,
+        };
+        Ok(id.filter(|&f| f != 0)) // 0 = produit sans famille
+    }
 
-        Ok(row.map(|r| r.get::<_, i32>(0)))
+    pub fn get_master_product(&mut self, ref_ean_master_product: &str) -> anyhow::Result<Option<String>> {
+        let row = self.client.query_opt(GET_MASTER_PRODUCT, &[&ref_ean_master_product])?;
+        match row {
+            Some(r) => Ok(r.try_get(0)?),
+            None => Ok(None),
+        }
     }
 
     /// Équivalent de get_size_of_products
@@ -79,17 +88,18 @@ impl ConnecteurServer {
     ) -> anyhow::Result<Vec<(String, String, f64, f64)>> {
         let rows = self.client.query(GET_SIZE_OF_PRODUCTS, &[&family_id])?;
 
-        Ok(rows
-            .into_iter()
-            .map(|r| (r.get::<_, String>(0), r.get::<_, String>(1), r.get::<_, f64>(2), r.get::<_, f64>(3)))
-            .collect())
-    }
-
-    pub fn get_master_product(&mut self, ref_ean_master_product: &str) -> anyhow::Result<Option<String>> {
-        let row = self.client.query_opt(GET_MASTER_PRODUCT, &[&ref_ean_master_product])?;
-        Ok(row
-            .map(|r| r.get::<_, String>(0))
-        )
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            let id: String = r.try_get(0)?;
+            let ean: String = r.try_get(1)?;
+            let h: Option<f64> = r.try_get(2)?;
+            let l: Option<f64> = r.try_get(3)?;
+            match h {
+                Some(h) if h > 0.0 => out.push((id, ean, h, l.unwrap_or(0.0))),
+                _ => eprintln!("[db] hauteur absente ou nulle pour l'EAN {ean}, ignorée"),
+            }
+        }
+        Ok(out)
     }
 }
 
