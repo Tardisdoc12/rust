@@ -17,7 +17,12 @@ const GET_FAMILY_ID: &str = r#"
 //--------------------------------------------------------------------------------------------------
 
 const GET_SIZE_OF_PRODUCTS: &str = r#"
-    SELECT "id"::text, "Ean", "Hauteur_du_produit", "Largeur_du_produit"
+    SELECT "id"::text,
+           "Ean",
+           CASE WHEN replace(btrim("Hauteur_du_produit"), ',', '.') ~ '^[0-9]+([.][0-9]+)?$'
+                THEN replace(btrim("Hauteur_du_produit"), ',', '.')::float8 END,
+           CASE WHEN replace(btrim("Largeur_du_produit"), ',', '.') ~ '^[0-9]+([.][0-9]+)?$'
+                THEN replace(btrim("Largeur_du_produit"), ',', '.')::float8 END
     FROM "default$default"."MasterProduct"
     WHERE "family_id" = $1
 "#;
