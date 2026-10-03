@@ -44,12 +44,12 @@ impl LabelResolver {
     }
 
     pub fn resolve(&self, detection: &mut Detection) {
-        if detection.label.is_empty() || detection.label == "OOD" || detection.label == "OOB" {
+        if detection.label.is_empty(){
             return;
         }
 
         // Affinage par la taille seulement si on a une homographie
-        if detection.height_cm > 0.0 {
+        if detection.height_cm > 0.0  && detection.label != "OOB" && detection.label != "OOD" {
             let height = detection.height_cm as f64;
             let best = self
                 .ean_family
