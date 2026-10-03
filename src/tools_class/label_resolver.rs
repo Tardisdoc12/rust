@@ -1,105 +1,74 @@
 //--------------------------------------------------------------------------------------------------
 // Filename: label_resolver.rs
 // Author: Jean Anquetil
-// Date: 2026-09-30
+// Date: 2026-10-03
 //--------------------------------------------------------------------------------------------------
 
 use std::collections::HashMap;
-
 use crate::tools_class::connecteur::ConnecteurServer;
 use crate::detections::detections::Detection;
 
 //--------------------------------------------------------------------------------------------------
 
-/// Connexion paresseuse + cache, durée de vie = un appel à `process`.
 pub struct LabelResolver {
-    conn: Option<ConnecteurServer>,
-    connect_failed: bool,
-    // label -> liste (ean, hauteur) ; None = famille inconnue
-    cache: HashMap<String, Option<Vec<(String, f64, String)>>>,
+    master_id: HashMap<String, String>,              // EAN -> id
+    ean_family: HashMap<String, i32>,                // EAN -> famille
+    family_sizes: HashMap<i32, Vec<(String, f64)>>,  // famille -> [(EAN, hauteur)]
 }
 
 //--------------------------------------------------------------------------------------------------
 
 impl LabelResolver {
-    pub fn new() -> Self {
-        Self { conn: None, connect_failed: false, cache: HashMap::new() }
-    }
+    pub fn load() -> anyhow::Result<Self> {
+        let rows = ConnecteurServer::connect()?.get_catalog()?; // connexion fermée ici
 
-    fn conn(&mut self) -> Option<&mut ConnecteurServer> {
-        if self.conn.is_none() && !self.connect_failed {
-            match ConnecteurServer::connect() {
-                Ok(c) => self.conn = Some(c),
-                Err(e) => {
-                    eprintln!("Erreur de connexion à la base : {e}");
-                    self.connect_failed = true; // on n'insiste pas pour les produits suivants
+        let mut master_id = HashMap::new();
+        let mut ean_family = HashMap::new();
+        let mut family_sizes: HashMap<i32, Vec<(String, f64)>> = HashMap::new();
+
+        for r in rows {
+            if let Some(f) = r.family_id.filter(|&f| f != 0) {
+                ean_family.insert(r.ean.clone(), f);
+                match r.height {
+                    Some(h) if h > 0.0 => family_sizes.entry(f).or_default().push((r.ean.clone(), h)),
+                    _ => eprintln!("[db] hauteur absente ou nulle pour l'EAN {}, ignorée", r.ean),
                 }
             }
+            master_id.insert(r.ean, r.id);
         }
-        self.conn.as_mut()
+        Ok(Self { master_id, ean_family, family_sizes })
     }
 
-    fn sizes_for(&mut self, label: &str) -> Option<&Vec<(String, f64, String)>> {
-        if !self.cache.contains_key(label) {
-            let fetched = self.conn().and_then(|c| {
-                let family_id = c.get_family_id(label).ok().flatten()?;
-                let list = c.get_size_of_products(family_id).ok()?;
-                if list.is_empty() {
-                    None
-                } else {
-                    Some(list.into_iter().map(|(id, ean, h, _l)| (ean, h, id)).collect())
-                }
-            });
-            self.cache.insert(label.to_string(), fetched);
-        }
-        self.cache.get(label).and_then(|o| o.as_ref())
+    pub fn get_master_product_id(&self, ean: &str) -> Option<String> {
+        self.master_id.get(ean).cloned()
     }
 
-    pub fn resolve(&mut self, detection: &mut Detection) {
-        if detection.label.is_empty()
-            || detection.label == "OOD"
-            || detection.label == "OOB"
-            || detection.height_cm <= 0.0
-        {
+    pub fn resolve(&self, detection: &mut Detection) {
+        if detection.label.is_empty() || detection.label == "OOD" || detection.label == "OOB" {
             return;
         }
 
-        let height = detection.height_cm as f64;
-
-        // L'emprunt de `self` par `sizes` se termine à la fin de ce bloc
-        let ean = {
-            let Some(sizes) = self.sizes_for(&detection.label) else { return };
-            match sizes
-                .iter()
-                .min_by(|a, b| (height - a.1).abs().total_cmp(&(height - b.1).abs()))
-            {
-                Some((ean, _, _)) => ean.clone(),
-                None => return,
+        // Affinage par la taille seulement si on a une homographie
+        if detection.height_cm > 0.0 {
+            let height = detection.height_cm as f64;
+            let best = self
+                .ean_family
+                .get(&detection.label)
+                .and_then(|f| self.family_sizes.get(f))
+                .and_then(|sizes| {
+                    sizes.iter()
+                        .min_by(|a, b| (height - a.1).abs().total_cmp(&(height - b.1).abs()))
+                        .map(|(ean, _)| ean.clone())
+                });
+            if let Some(ean) = best {
+                detection.label = ean;
             }
-        };
-
-        detection.master_product_id = self.get_master_product_id(&ean).unwrap_or_default();
-        detection.label = ean;
-    }
-
-    fn master_product_id_for(&mut self, label: &str) ->  Option<&Vec<(String, f64, String)>> {
-        if !self.cache.contains_key(label) {
-            let fetched = self.conn().and_then(|c| {
-                let master_product_id = c.get_master_product(label).ok().flatten()?;
-                if master_product_id.is_empty() {
-                    None
-                } else {
-                    Some(Vec::from([(label.to_string(), 0.0 as f64, master_product_id)]))
-                }
-            });
-            self.cache.insert(label.to_string(), fetched);
         }
-        self.cache.get(label).and_then(|o| o.as_ref())
-    }
 
-   pub fn get_master_product_id(&mut self, label: &str) -> Option<String> {
-        self.master_product_id_for(label)
-            .and_then(|v| v.iter().find_map(|(_, _, master_product_id)| Some(master_product_id.clone())))
+        match self.get_master_product_id(&detection.label) {
+            Some(id) => detection.master_product_id = id,
+            None => eprintln!("[resolver] pas de master product pour l'EAN {}", detection.label),
+        }
     }
 }
 

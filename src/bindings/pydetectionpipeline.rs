@@ -89,6 +89,7 @@ pub struct PyDetectionPipeline {
     processor_yolo_ocr: Mutex<Processor<Yolov7PriceTag>>,
     processor_cnn_digit: Mutex<Processor<CNNDigit>>,
     sam2_processor: Mutex<Sam2Processor>,
+    resolver: LabelResolver,
 }
 
 #[pymethods]
@@ -131,6 +132,7 @@ impl PyDetectionPipeline {
                 h_ocr.join().map_err(|_| anyhow::anyhow!("thread yolo_ocr a paniqué"))??,
                 h_digit.join().map_err(|_| anyhow::anyhow!("thread cnn_digit a paniqué"))??,
                 h_sam2.join().map_err(|_| anyhow::anyhow!("thread sam2 a paniqué"))??,
+                Ok(LabelResolver::new())?,
             ))
         });
 
@@ -142,7 +144,10 @@ impl PyDetectionPipeline {
             processor_yolo_ocr,
             processor_cnn_digit,
             sam2_processor,
+            resolver,
         ) = result.map_err(to_py_err)?;
+
+        let _ = resolver.load();
 
         Ok(Self {
             processor_yolo: Mutex::new(processor_yolo),
@@ -152,6 +157,7 @@ impl PyDetectionPipeline {
             processor_yolo_ocr: Mutex::new(processor_yolo_ocr),
             processor_cnn_digit: Mutex::new(processor_cnn_digit),
             sam2_processor: Mutex::new(sam2_processor),
+            resolver: resolver,
         })
     }
 
@@ -177,7 +183,6 @@ impl PyDetectionPipeline {
         let mut vec_detections = process_locked(&self.processor_yolo, &image_rust.mat)
             .map_err(to_py_err)?;
 
-        let mut resolver = LabelResolver::new();
         let mut homography: Option<Mat> = None;
         let mut objects: Vec<(usize, (f32, f32))> = Vec::new();
         let mut number_etiquette: i8 = 0;
@@ -210,15 +215,14 @@ impl PyDetectionPipeline {
             match detection.categorie {
                 DetectionClass::Produit => {
                     self.classify_produit(detection, homography.as_ref());
-                    resolver.resolve(detection);
+                    self.resolver.resolve(detection);
                 }
                 DetectionClass::Etiquette => {
                     self.classify_etiquette(detection);
                     if let Some(idx) = nearest_object(&objects, detection.bbox.center_rel()) {
                         assignments.push((idx, detection.price));
                     }
-                    detection.master_product_id = resolver.get_master_product_id(&detection.label)
-                    .expect("Failed to get master product ID");
+                    detection.master_product_id = self.resolver.get_master_product_id(&detection.label).unwrap_or_default();
                 }
                 DetectionClass::Publicity => {
                     if let Ok(Some(mut etiquette)) = self.classify_publicity(detection, img_shape) {
@@ -226,16 +230,13 @@ impl PyDetectionPipeline {
                             assignments.push((idx, etiquette.price));
                         }
                         etiquette.label = "PL".to_string();
-                        etiquette.master_product_id = resolver.get_master_product_id(&etiquette.label)
-                        .expect("Failed to get master product ID");
+                        etiquette.master_product_id = self.resolver.get_master_product_id(&etiquette.label).unwrap_or_default();
                         new_etiquettes.push(etiquette);
                     }
-                    detection.master_product_id = resolver.get_master_product_id(&detection.label)
-                    .expect("Failed to get master product ID");
+                    detection.master_product_id = self.resolver.get_master_product_id(&detection.label).unwrap_or_default();
                 }
                 DetectionClass::NoProduct => {
-                    detection.master_product_id = resolver.get_master_product_id(&detection.label)
-                    .expect("Failed to get master product ID");
+                    detection.master_product_id = self.resolver.get_master_product_id(&detection.label).unwrap_or_default();
                 }
                 _ => {}
             }
