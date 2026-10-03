@@ -67,7 +67,7 @@ impl LabelResolver {
 
         match self.get_master_product_id(&detection.label) {
             Some(id) => detection.master_product_id = id,
-            None => eprintln!("[resolver] pas de master product pour l'EAN {}", detection.label),
+            None => eprintln!("[resolver] pas de master product pour '{}'", detection.label),
         }
     }
 }
