@@ -57,23 +57,29 @@ impl LabelResolver {
 
     pub fn resolve(&mut self, detection: &mut Detection) {
         if detection.label.is_empty()
+            || detection.label == "OOD"
             || detection.label == "OOB"
             || detection.height_cm <= 0.0
         {
-            detection.master_product_id = self.get_master_product_id(&detection.label);
             return;
         }
 
         let height = detection.height_cm as f64;
-        let Some(sizes) = self.sizes_for(&detection.label) else { return };
 
-        if let Some((ean, _, id)) = sizes
-            .iter()
-            .min_by(|a, b| (height - a.1).abs().total_cmp(&(height - b.1).abs()))
-        {
-            detection.label = ean.clone();
-            detection.master_product_id = id.clone();
-        }
+        // L'emprunt de `self` par `sizes` se termine à la fin de ce bloc
+        let ean = {
+            let Some(sizes) = self.sizes_for(&detection.label) else { return };
+            match sizes
+                .iter()
+                .min_by(|a, b| (height - a.1).abs().total_cmp(&(height - b.1).abs()))
+            {
+                Some((ean, _, _)) => ean.clone(),
+                None => return,
+            }
+        };
+
+        detection.master_product_id = self.get_master_product_id(&ean).unwrap_or_default();
+        detection.label = ean;
     }
 
     fn master_product_id_for(&mut self, label: &str) ->  Option<&Vec<(String, f64, String)>> {
