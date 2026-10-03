@@ -60,6 +60,7 @@ impl LabelResolver {
             || detection.label == "OOB"
             || detection.height_cm <= 0.0
         {
+            detection.master_product_id = self.get_master_product_id(&detection.label);
             return;
         }
 
