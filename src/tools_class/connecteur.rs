@@ -4,6 +4,8 @@
 // Date: 2026-10-03
 //--------------------------------------------------------------------------------------------------
 
+use postgres::{Client, NoTls};
+
 const GET_CATALOG: &str = r#"
     SELECT "id"::text,
            "Ean",
@@ -24,7 +26,30 @@ pub struct CatalogRow {
 
 //--------------------------------------------------------------------------------------------------
 
+pub struct ConnecteurServer {
+    client: Client,
+}
+
 impl ConnecteurServer {
+    pub fn connect() -> anyhow::Result<Self> {
+        let identifiant = std::env::var("IDENTIFIANT")?;
+        let password_db = std::env::var("PASSWORDDB")?;
+        let database = std::env::var("DATABASE")?;
+        let hostname = std::env::var("DB_HOST")?;
+        let port: u16 = std::env::var("PORT")
+            .unwrap_or_else(|_| "5432".to_string())
+            .parse()?;
+
+        let conn_str = format!(
+            "host={} port={} dbname={} user={} password={} connect_timeout=5",
+            hostname, port, database, identifiant, password_db
+        );
+
+        let client = Client::connect(&conn_str, NoTls)?;
+
+        Ok(Self { client })
+    }
+    
     pub fn get_catalog(&mut self) -> anyhow::Result<Vec<CatalogRow>> {
         let rows = self.client.query(GET_CATALOG, &[])?;
         let mut out = Vec::with_capacity(rows.len());

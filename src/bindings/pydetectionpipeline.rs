@@ -106,6 +106,7 @@ impl PyDetectionPipeline {
         yolo_26_price_tag_path: &str,
         device: &str,
     ) -> PyResult<Self> {
+        let resolver = LabelResolver::load().map_err(to_py_err)?;
         // Chargement des 8 modèles EN PARALLÈLE (fichiers et sessions ONNX
         // indépendants, aucune synchronisation nécessaire entre eux).
         let filter = EnvFilter::try_from_default_env()
@@ -132,7 +133,6 @@ impl PyDetectionPipeline {
                 h_ocr.join().map_err(|_| anyhow::anyhow!("thread yolo_ocr a paniqué"))??,
                 h_digit.join().map_err(|_| anyhow::anyhow!("thread cnn_digit a paniqué"))??,
                 h_sam2.join().map_err(|_| anyhow::anyhow!("thread sam2 a paniqué"))??,
-                Ok(LabelResolver::new())?,
             ))
         });
 
@@ -144,10 +144,7 @@ impl PyDetectionPipeline {
             processor_yolo_ocr,
             processor_cnn_digit,
             sam2_processor,
-            resolver,
         ) = result.map_err(to_py_err)?;
-
-        let _ = resolver.load();
 
         Ok(Self {
             processor_yolo: Mutex::new(processor_yolo),
@@ -157,7 +154,7 @@ impl PyDetectionPipeline {
             processor_yolo_ocr: Mutex::new(processor_yolo_ocr),
             processor_cnn_digit: Mutex::new(processor_cnn_digit),
             sam2_processor: Mutex::new(sam2_processor),
-            resolver: resolver,
+            resolver,
         })
     }
 
