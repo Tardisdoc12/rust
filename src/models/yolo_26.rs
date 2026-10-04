@@ -174,7 +174,6 @@ impl YOLO26 {
                 let overlap_j = inter / area_j;
                 if overlap_j > 0.7 && area_i > area_j {
                     keep[j] = false;   // même comportement que le Python
-                    break;
                 }
             }
         }
