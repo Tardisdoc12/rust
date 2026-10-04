@@ -160,46 +160,21 @@ impl YOLO26 {
         let mut keep = vec![true; n];
 
         for i in 0..n {
-            if !keep[i] {
-                continue;
-            }
-
+            if !keep[i] { continue; }
             for j in 0..n {
-                if i == j || !keep[j] {
-                    continue;
-                }
+                if i == j || !keep[j] { continue; }
 
                 let area_i = Self::box_area(&detections[i].bbox);
                 let area_j = Self::box_area(&detections[j].bbox);
+                if area_i <= 0.0 || area_j <= 0.0 { continue; }
 
-                if area_i <= 0.0 || area_j <= 0.0 {
-                    continue;
-                }
+                let inter = Self::intersection_area(&detections[i].bbox, &detections[j].bbox);
+                if inter <= 0.0 { continue; }
 
-                let inter = Self::intersection_area(
-                    &detections[i].bbox,
-                    &detections[j].bbox,
-                );
-
-                if inter <= 0.0 {
-                    continue;
-                }
-
-                let overlap_i = inter / area_i;
                 let overlap_j = inter / area_j;
-
-                // i est une grande boîte qui contient fortement j.
-                // On garde la petite boîte j.
-                if area_i > area_j && overlap_j > 0.7 {
-                    keep[i] = false;
+                if overlap_j > 0.7 && area_i > area_j {
+                    keep[j] = false;   // même comportement que le Python
                     break;
-                }
-
-                // j est une grande boîte qui contient fortement i.
-                // On garde la petite boîte i.
-                if area_j > area_i && overlap_i > 0.7 {
-                    keep[j] = false;
-                    continue;
                 }
             }
         }
