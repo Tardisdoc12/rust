@@ -42,6 +42,10 @@ pub struct Detection {
     pub position: i32,
     #[pyo3(get, set)]
     pub master_product_id: String,
+    #[pyo3(get, set)]
+    pub reason_saving: Option<String>,
+    #[pyo3(get, set)]
+    pub classification_saving: String,
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -112,6 +116,8 @@ impl Detection {
             shelf_position: 0,
             master_product_id: "".to_string(),
             position: 0,
+            reason_saving: Some("".to_string()),
+            classification_saving: "".to_string(),
         }
     }
 

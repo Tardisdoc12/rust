@@ -10,6 +10,7 @@ use ort::session::Session;
 use ort::value::Value;
 
 use crate::models::model_core::ModelPipeline;
+use crate::detections::classify_result::{ClassifResult, top2_margin};
 use crate::functions_::{setup_model_avec_cache::setup_model_avec_cache, letterbox::letterbox_rgb};
 const FILL_RGB: [u8; 3] = [114, 114, 114];
 
@@ -67,13 +68,6 @@ fn infer(session: &mut Session, input: Vec<f32>) -> anyhow::Result<Vec<f32>> {
 
 //--------------------------------------------------------------------------------------------------
 
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct ClassificationResult {
-    pub class_label: String,
-    pub score: f32,
-}
-
 fn softmax(logits: &[f32]) -> Vec<f32> {
     // stabilité numérique : soustrait le max avant exp (évite overflow)
     let max_logit = logits.iter().cloned().fold(f32::MIN, f32::max);
@@ -82,7 +76,7 @@ fn softmax(logits: &[f32]) -> Vec<f32> {
     exps.iter().map(|&x| x / sum).collect()
 }
 
-fn postprocess(raw_output: &[f32], classes: &[String]) -> anyhow::Result<ClassificationResult> {
+fn postprocess(raw_output: &[f32], classes: &[String]) -> anyhow::Result<ClassifResult> {
     let probabilities = softmax(raw_output);
 
     let (class_idx, &score) = probabilities
@@ -96,7 +90,7 @@ fn postprocess(raw_output: &[f32], classes: &[String]) -> anyhow::Result<Classif
         .cloned()
         .unwrap_or_else(|| class_idx.to_string());
 
-    Ok(ClassificationResult { class_label, score })
+    Ok(ClassifResult { class_label, score, margin: top2_margin(&probabilities), energy: 0.0})
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -113,7 +107,7 @@ impl InceptionV3 {
 }
 
 impl ModelPipeline for InceptionV3 {
-    type Output = ClassificationResult;
+    type Output = ClassifResult;
 
     fn setup_model(&mut self, model_path: &str, device: &str) -> anyhow::Result<()> {
         let session = setup_model_avec_cache(model_path, device)?;

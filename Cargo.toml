@@ -18,3 +18,4 @@ pyo3 = "0.29.2"
 serde_json = "1.0.151"
 rayon = "1.10"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.10.3"

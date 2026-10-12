@@ -9,6 +9,7 @@ use opencv::core::Mat;
 use opencv::prelude::*;
 
 use crate::models::model_core::ModelPipeline;
+use crate::detections::classify_result::{ClassifResult, top2_margin};
 use crate::functions_::{setup_model_avec_cache::setup_model_avec_cache, letterbox::letterbox_rgb};
 
 //--------------------------------------------------------------------------------------------------
@@ -16,13 +17,6 @@ const FILL_RGB: [u8; 3] = [0, 0, 0];
 const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct ClassificationResult {
-    pub class_label: String,
-    pub score: f32,
-    pub energy: f32,
-}
 
 pub struct EfficientNetB2 {
     session: Option<Session>,
@@ -55,7 +49,7 @@ impl EfficientNetB2 {
 //--------------------------------------------------------------------------------------------------
 
 impl ModelPipeline for EfficientNetB2 {
-    type Output = ClassificationResult;
+    type Output = ClassifResult;
 
     fn setup_model(&mut self, model_path: &str, device: &str) -> anyhow::Result<()> {
         let session = setup_model_avec_cache(model_path, device)?;
@@ -138,7 +132,7 @@ impl ModelPipeline for EfficientNetB2 {
 
         let energy = Self::energy_score(raw_output, self.temperature);
 
-        Ok(ClassificationResult { class_label, score, energy })
+        Ok(ClassifResult { class_label, score, margin: top2_margin(&probabilities), energy })
     }
 
     fn unload(&mut self) {

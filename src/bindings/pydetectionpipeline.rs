@@ -29,6 +29,7 @@ use crate::functions_::functions_ocr::{
 use crate::functions_::utils::{safe_float, clean_double_dot, clean_thousand_dot, compute_homography_from_reference};
 use crate::functions_::positionnement::set_all_position;
 use crate::tools_class::label_resolver::LabelResolver;
+use crate::detections::save_reson::should_save;
 
 //--------------------------------------------------------------------------------------------------
 
@@ -269,12 +270,21 @@ impl PyDetectionPipeline {
             Err(e) => { eprintln!("[produit] efficientnet: {e:#}"); return; }
         };
 
+        if let Some(reason) = should_save(&result_inception, &result_efficient) {
+            detection.reason_saving = Some(reason.as_str().to_string());
+            detection.classification_saving = if result_inception.score > result_efficient.score {
+                result_inception.class_label.clone()
+            } else {
+                result_efficient.class_label.clone()
+            };
+        }
+
         let label_inception = result_inception.class_label;
         let score_inception = result_inception.score;
         let label_efficient = result_efficient.class_label;
         let score_efficient = result_efficient.score;
         let energy_efficient = result_efficient.energy;
-
+        
         if score_inception >= 0.996 {
             detection.label = label_inception;
             detection.score = score_inception;

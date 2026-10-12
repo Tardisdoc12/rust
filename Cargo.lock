@@ -1027,6 +1027,7 @@ dependencies = [
  "ort",
  "postgres",
  "pyo3",
+ "rand",
  "rayon",
  "serde_json",
  "tracing-subscriber",
