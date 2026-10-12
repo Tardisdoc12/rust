@@ -91,6 +91,7 @@ pub struct PyDetectionPipeline {
     processor_cnn_digit: Mutex<Processor<CNNDigit>>,
     sam2_processor: Mutex<Sam2Processor>,
     resolver: LabelResolver,
+    has_ref: bool = false,
 }
 
 #[pymethods]
@@ -191,6 +192,7 @@ impl PyDetectionPipeline {
                     if let Ok(Some((h, _))) = self.classify_reference(detection) {
                         homography = Some(h);
                     }
+                    self.has_ref = true;
                 }
                 DetectionClass::Etiquette => {
                     number_etiquette += 1;
@@ -298,6 +300,9 @@ impl PyDetectionPipeline {
                 detection.label = label_efficient;
                 detection.score = score_efficient;
             }
+        }
+        if (!self.has_ref) {
+            return
         }
         match self.predict_mask(detection.bbox.xyxyn()) {
             Ok(mask) => detection.mask._mat_bin = mask._mat_bin,
