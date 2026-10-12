@@ -91,7 +91,7 @@ pub struct PyDetectionPipeline {
     processor_cnn_digit: Mutex<Processor<CNNDigit>>,
     sam2_processor: Mutex<Sam2Processor>,
     resolver: LabelResolver,
-    has_ref: bool = false,
+    has_ref: bool,
 }
 
 #[pymethods]
@@ -157,6 +157,7 @@ impl PyDetectionPipeline {
             processor_cnn_digit: Mutex::new(processor_cnn_digit),
             sam2_processor: Mutex::new(sam2_processor),
             resolver,
+            has_ref: false,
         })
     }
 
@@ -301,7 +302,7 @@ impl PyDetectionPipeline {
                 detection.score = score_efficient;
             }
         }
-        if (!self.has_ref) {
+        if !self.has_ref {
             return
         }
         match self.predict_mask(detection.bbox.xyxyn()) {
