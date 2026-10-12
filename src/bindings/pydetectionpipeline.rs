@@ -91,7 +91,6 @@ pub struct PyDetectionPipeline {
     processor_cnn_digit: Mutex<Processor<CNNDigit>>,
     sam2_processor: Mutex<Sam2Processor>,
     resolver: LabelResolver,
-    has_ref: bool,
 }
 
 #[pymethods]
@@ -157,7 +156,6 @@ impl PyDetectionPipeline {
             processor_cnn_digit: Mutex::new(processor_cnn_digit),
             sam2_processor: Mutex::new(sam2_processor),
             resolver,
-            has_ref: false,
         })
     }
 
@@ -186,6 +184,7 @@ impl PyDetectionPipeline {
         let mut homography: Option<Mat> = None;
         let mut objects: Vec<(usize, (f32, f32))> = Vec::new();
         let mut number_etiquette: i8 = 0;
+        let mut has_ref : bool = false;
 
         for (i, detection) in vec_detections.iter_mut().enumerate() {
             match detection.categorie {
@@ -193,7 +192,7 @@ impl PyDetectionPipeline {
                     if let Ok(Some((h, _))) = self.classify_reference(detection) {
                         homography = Some(h);
                     }
-                    self.has_ref = true;
+                    has_ref = true;
                 }
                 DetectionClass::Etiquette => {
                     number_etiquette += 1;
@@ -215,7 +214,7 @@ impl PyDetectionPipeline {
         for detection in vec_detections.iter_mut() {
             match detection.categorie {
                 DetectionClass::Produit => {
-                    self.classify_produit(detection, homography.as_ref());
+                    self.classify_produit(detection, homography.as_ref(), has_ref);
                     self.resolver.resolve(detection);
                 }
                 DetectionClass::Etiquette => {
@@ -263,7 +262,7 @@ impl PyDetectionPipeline {
             .predict_box(bbox)
     }
 
-    fn classify_produit(&self, detection: &mut Detection, h: Option<&Mat>) {
+    fn classify_produit(&self, detection: &mut Detection, h: Option<&Mat>, has_ref: bool) {
        let result_inception = match process_locked(&self.processor_inception, &detection.mask.mat) {
             Ok(r) => r,
             Err(e) => { eprintln!("[produit] inception: {e:#}"); return; }
@@ -302,7 +301,7 @@ impl PyDetectionPipeline {
                 detection.score = score_efficient;
             }
         }
-        if !self.has_ref {
+        if !has_ref {
             return
         }
         match self.predict_mask(detection.bbox.xyxyn()) {
