@@ -239,7 +239,6 @@ impl ModelPipeline for TiledYOLO26 {
                 let tile = make_tile(img, t)?;
                 let tensor = mat_to_tensor(&tile)?;
                 let out = run_session(session, tensor)?;
-                println!("Output length : {}", out.len() / 6);
 
                 match per_tile {
                     None => per_tile = Some(out.len()),
@@ -290,12 +289,10 @@ impl ModelPipeline for TiledYOLO26 {
                 &mut cands,
             );
         }
-        println!("Nombre de candidats avant nettoyage : {}", cands.len());
 
         // 2. nettoyage : fragments de coutures, boîtes imbriquées, NMS final
         let cands = self.cfg.merge.clean(cands);
-        println!("Nombre de candidats après nettoyage : {}", cands.len());
-
+        
         // --- Conversion vers le type métier utilisé dans le reste du pipeline (identique à YOLO26) ---
         let img_shape = (source_image.rows() as usize, source_image.cols() as usize);
 
