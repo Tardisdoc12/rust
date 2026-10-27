@@ -189,6 +189,8 @@ impl PyDetectionPipeline {
         let mut vec_detections = process_locked(&self.processor_yolo, &image_rust.mat)
             .map_err(to_py_err)?;
 
+        println!("Initial detections: {:?}", vec_detections);
+        println!("Nombre de détections: {}", vec_detections.len());
         let mut homography: Option<Mat> = None;
         let mut objects: Vec<(usize, (f32, f32))> = Vec::new();
         let mut number_etiquette: i8 = 0;
