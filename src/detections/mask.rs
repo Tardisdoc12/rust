@@ -6,7 +6,7 @@ use opencv::prelude::*;
 use opencv::imgproc;
 
 #[pyclass(name = "Mask", unsendable, from_py_object)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Mask {
     pub mat: Mat,
     pub _mat_bin : Mat,
