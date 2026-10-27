@@ -57,7 +57,7 @@ pub struct YOLO26 {
     source_image: Mutex<Option<Mat>>,  // NOUVEAU
 }
 
-fn crop_mat(image: &Mat, bbox: (i32, i32, i32, i32)) -> anyhow::Result<Mat> {
+pub fn crop_mat(image: &Mat, bbox: (i32, i32, i32, i32)) -> anyhow::Result<Mat> {
     let (x1, y1, x2, y2) = bbox;
     let largeur = image.cols();
     let hauteur = image.rows();

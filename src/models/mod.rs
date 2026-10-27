@@ -5,3 +5,4 @@ pub mod yolo_26;
 pub mod yolo_v7;
 pub mod cnn_digit;
 pub mod sam2;
+pub mod tiled_yolo_26;

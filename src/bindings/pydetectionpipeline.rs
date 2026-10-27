@@ -18,7 +18,7 @@ use crate::models::{
     cnn_digit::CNNDigit,
     inceptionv3::InceptionV3,
     efficientnetb2::EfficientNetB2,
-    yolo_26::YOLO26,
+    tiled_yolo_26::{TiledYOLO26, TiledConfig},
     sam2::Sam2Processor,
     yolo_v7::Yolov7PriceTag,
 };
@@ -28,6 +28,7 @@ use crate::functions_::functions_ocr::{
 };
 use crate::functions_::utils::{safe_float, clean_double_dot, clean_thousand_dot, compute_homography_from_reference};
 use crate::functions_::positionnement::set_all_position;
+use crate::functions_::tiled_merge::MergeConfig;
 use crate::tools_class::label_resolver::LabelResolver;
 use crate::detections::save_reson::should_save;
 
@@ -83,8 +84,8 @@ const REFERENCE_REAL_CM: f32 = 10.0;
 
 #[pyclass(name = "DetectionPipeline")]
 pub struct PyDetectionPipeline {
-    processor_yolo: Mutex<Processor<YOLO26>>,
-    processor_yolo_price_tag: Mutex<Processor<YOLO26>>,
+    processor_yolo: Mutex<Processor<TiledYOLO26>>,
+    processor_yolo_price_tag: Mutex<Processor<TiledYOLO26>>,
     processor_inception: Mutex<Processor<InceptionV3>>,
     processor_efficientnet: Mutex<Processor<EfficientNetB2>>,
     processor_yolo_ocr: Mutex<Processor<Yolov7PriceTag>>,
@@ -114,8 +115,19 @@ impl PyDetectionPipeline {
             .unwrap_or_else(|_| EnvFilter::new("ort=warn"));
         let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
         let result: anyhow::Result<_> = thread::scope(|scope| {
-            let h_yolo = scope.spawn(|| Processor::new(YOLO26::new(), yolo_26_path, device));
-            let h_yolo_pt = scope.spawn(|| Processor::new(YOLO26::new(), yolo_26_price_tag_path, device));
+            let h_yolo = scope.spawn(|| Processor::new(TiledYOLO26::with_config(TiledConfig {
+                overlap: 0.3,
+                conf: 0.30,
+                scales: vec![1.0, 0.5],
+                merge: MergeConfig { class_groups: vec![vec![1, 2, 3, 4]], ..Default::default() },
+                ..Default::default()
+            }), yolo_26_path, device));
+            let h_yolo_pt = scope.spawn(|| Processor::new(TiledYOLO26::with_config(TiledConfig {
+                overlap: 0.3,
+                conf: 0.30,
+                scales: vec![1.0, 0.5],
+                ..Default::default()
+            }), yolo_26_price_tag_path, device));
             let h_incep = scope.spawn(|| Processor::new(InceptionV3::new(), inceptionv3_path, device));
             let h_effnet = scope.spawn(|| Processor::new(EfficientNetB2::new(), efficientnetb2_path, device));
             let h_ocr = scope.spawn(|| Processor::new(Yolov7PriceTag::new(), yolo_v7_path, device));
