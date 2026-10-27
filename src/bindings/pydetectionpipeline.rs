@@ -21,6 +21,7 @@ use crate::models::{
     tiled_yolo_26::{TiledYOLO26, TiledConfig},
     sam2::Sam2Processor,
     yolo_v7::Yolov7PriceTag,
+    yolo_26::YOLO26
 };
 use crate::detections::{mask::Mask, detection_class::DetectionClass, detections::Detection};
 use crate::functions_::functions_ocr::{
@@ -85,7 +86,7 @@ const REFERENCE_REAL_CM: f32 = 10.0;
 #[pyclass(name = "DetectionPipeline")]
 pub struct PyDetectionPipeline {
     processor_yolo: Mutex<Processor<TiledYOLO26>>,
-    processor_yolo_price_tag: Mutex<Processor<TiledYOLO26>>,
+    processor_yolo_price_tag: Mutex<Processor<YOLO26>>,
     processor_inception: Mutex<Processor<InceptionV3>>,
     processor_efficientnet: Mutex<Processor<EfficientNetB2>>,
     processor_yolo_ocr: Mutex<Processor<Yolov7PriceTag>>,
@@ -122,12 +123,7 @@ impl PyDetectionPipeline {
                 merge: MergeConfig { class_groups: vec![vec![1, 2, 3, 4]], ..Default::default() },
                 ..Default::default()
             }), yolo_26_path, device));
-            let h_yolo_pt = scope.spawn(|| Processor::new(TiledYOLO26::with_config(TiledConfig {
-                overlap: 0.3,
-                conf: 0.30,
-                scales: vec![1.0, 0.5],
-                ..Default::default()
-            }), yolo_26_price_tag_path, device));
+            let h_yolo_pt = scope.spawn(|| Processor::new(YOLO26::new(), yolo_26_price_tag_path, device));
             let h_incep = scope.spawn(|| Processor::new(InceptionV3::new(), inceptionv3_path, device));
             let h_effnet = scope.spawn(|| Processor::new(EfficientNetB2::new(), efficientnetb2_path, device));
             let h_ocr = scope.spawn(|| Processor::new(Yolov7PriceTag::new(), yolo_v7_path, device));
