@@ -298,11 +298,11 @@ impl PyDetectionPipeline {
         let score_efficient = result_efficient.score;
         let energy_efficient = result_efficient.energy;
         
-        if score_inception >= 0.996 {
+        if score_inception >= 0.996 && energy_efficient < -3.0 {
             detection.label = label_inception;
             detection.score = score_inception;
         } else if score_inception >= 0.57 {
-            detection.label = if score_efficient >= 0.23 { label_efficient } else { "OOB".to_string() };
+            detection.label = if score_efficient >= 0.23 && energy_efficient < -3.0 { label_efficient } else { "OOB".to_string() };
             detection.score = score_efficient;
         } else {
             detection.label = "OOB".to_string();
