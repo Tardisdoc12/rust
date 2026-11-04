@@ -310,71 +310,53 @@ impl ModelPipeline for YOLO26 {
     }
 
     fn postprocess(&self, raw_output: &[f32]) -> anyhow::Result<Self::Output> {
-        if raw_output.len() % 6 != 0 {
+        // Export YOLOv7 --end2end (ONNX_ORT) : [batch_id, x1, y1, x2, y2, class_id, score]
+        const VALUES_PER_DETECTION: usize = 7;
+
+        if raw_output.len() % VALUES_PER_DETECTION != 0 {
             return Err(anyhow::anyhow!(
-                "Sortie YOLO26 invalide : {} valeurs, attendu un multiple de 6",
-                raw_output.len()
+                "Sortie YOLOv7 invalide : {} valeurs, attendu un multiple de {}",
+                raw_output.len(), VALUES_PER_DETECTION
             ));
         }
 
         let info = self.letterbox_info.lock().unwrap()
-            .ok_or_else(|| anyhow::anyhow!("letterbox_info absent, preprocess doit être appelé avant postprocess"))?;
-
-        // .take() plutôt que .clone() : Mat n'implémente pas Clone (seulement try_clone),
-        // donc on retire la valeur de l'Option au lieu de la copier
+            .ok_or_else(|| anyhow::anyhow!("letterbox_info absent"))?;
         let source_image = self.source_image.lock().unwrap().take()
-            .ok_or_else(|| anyhow::anyhow!("source_image absent, preprocess doit être appelé avant postprocess"))?;
+            .ok_or_else(|| anyhow::anyhow!("source_image absent"))?;
 
-        let mut raw_detections = Vec::new();
+        // Comme en Python : on ne garde que la détection la plus confiante
+        let best = raw_output
+            .chunks_exact(VALUES_PER_DETECTION)
+            .filter(|c| c[6] >= CONF_THRESHOLD)
+            .max_by(|a, b| a[6].total_cmp(&b[6]));
 
-        for chunk in raw_output.chunks_exact(6) {
-            let score = chunk[4];
-            if score < CONF_THRESHOLD {
-                continue;
+        let Some(c) = best else { return Ok(Vec::new()) };
+
+        let bbox = self.unletterbox_bbox(
+            &BoundingBox { x1: c[1], y1: c[2], x2: c[3], y2: c[4] }, &info);
+        let class_id = c[5] as usize;
+        let class_label = self.classes.get(class_id).cloned()
+            .unwrap_or_else(|| format!("class_{}", class_id));
+
+        let categorie = match DetectionClass::from_str(&class_label) {
+            Ok(cat) => cat,
+            Err(_) => {
+                eprintln!("[price_tag] classe inconnue de DetectionClass : {class_label:?}");
+                return Ok(Vec::new());
             }
+        };
 
-            let raw_bbox = BoundingBox { x1: chunk[0], y1: chunk[1], x2: chunk[2], y2: chunk[3] };
-            let bbox = self.unletterbox_bbox(&raw_bbox, &info);
-
-            let class_id = chunk[5] as usize;
-            let class_label = self.classes.get(class_id).cloned()
-                .unwrap_or_else(|| format!("class_{}", class_id));
-
-            raw_detections.push(RawDetection { bbox, score, class_label });
-        }
-
-        let raw_detections = self.filter_detections(raw_detections);
-
-        // --- Conversion vers le type métier utilisé dans le reste du pipeline ---
         let img_shape = (info.original_height as usize, info.original_width as usize);
+        let rust_bbox = BBox::new(bbox.x1, bbox.y1, bbox.x2, bbox.y2, img_shape);
+        let cropped = crop_mat(&source_image,
+            (bbox.x1 as i32, bbox.y1 as i32, bbox.x2 as i32, bbox.y2 as i32))?;
+        let mut mask = Mask::new();
+        mask.setup_mat(cropped);
 
-        let detections: Vec<BigDetection> = raw_detections
-            .into_iter()
-            .filter_map(|raw| {
-                // Si le label ne correspond à aucune DetectionClass connue, on ignore
-                // silencieusement cette détection plutôt que de faire planter tout le batch.
-                let categorie = DetectionClass::from_str(&raw.class_label).ok()?;
-
-                let bbox = BBox::new(raw.bbox.x1, raw.bbox.y1, raw.bbox.x2, raw.bbox.y2, img_shape);
-
-                let cropped = crop_mat(
-                    &source_image,
-                    (raw.bbox.x1 as i32, raw.bbox.y1 as i32, raw.bbox.x2 as i32, raw.bbox.y2 as i32),
-                ).ok()?;
-
-                let mut mask = Mask::new();
-                mask.setup_mat(cropped);
-
-                // base_name reste vide ici : cette info (Store_point/Shelf_number) est
-                // calculée plus haut dans le pipeline Python, pas disponible à ce niveau.
-                let mut detection = BigDetection::new(categorie, bbox, mask, String::new());
-                detection.set_prediction(raw.score, raw.class_label);
-
-                Some(detection)
-            })
-            .collect();
-
-        Ok(detections)
+        let mut det = BigDetection::new(categorie, rust_bbox, mask, String::new());
+        det.set_prediction(c[6], class_label);
+        Ok(vec![det])
     }
 
     fn unload(&mut self) {
