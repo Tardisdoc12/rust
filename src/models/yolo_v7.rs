@@ -16,7 +16,7 @@ use crate::functions_::setup_model_avec_cache::setup_model_avec_cache;
 
 //--------------------------------------------------------------------------------------------------
 
-const IMAGE_SIZE: i32 = 640;
+const IMAGE_SIZE: i32 = 320;
 const CONF_THRESHOLD: f32 = 0.25;
 
 #[derive(Debug, Clone, Copy)]
