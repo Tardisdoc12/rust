@@ -1,8 +1,8 @@
 use crate::detections::classify_result::ClassifResult;
 
-const MARGIN_THR_INCEPTION: f32 = 0.60;
-const MARGIN_THR_EFFICIENT: f32 = 0.60;
-const RANDOM_RATE: f32 = 0.02;
+const MARGIN_THR_INCEPTION: f32 = 0.80;
+const MARGIN_THR_EFFICIENT: f32 = 0.80;
+const RANDOM_RATE: f32 = 0.01;
 
 #[derive(Clone)]
 pub enum SaveReason { Disagreement, LowMargin, RandomConfident }
