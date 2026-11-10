@@ -15,7 +15,9 @@ fn ignored_classes() -> HashSet<&'static str> {
 
 fn class_to_char(name: &str) -> String {
     match name {
-        "virgule" => ",".to_string(),
+        // "." et pas "," : `str::parse::<f32>` (safe_float) ne comprend pas la
+        // virgule → "1575,00" donnait 0.0.
+        "virgule" | "," => ".".to_string(),
         other => other.to_string(),
     }
 }
@@ -113,12 +115,20 @@ pub fn filter_to_main_y_line(detections: Vec<Detection>, y_tolerance: f32) -> Ve
     let mut clusters: Vec<Vec<Detection>> = vec![vec![sorted[0].clone()]];
 
     for d in sorted.into_iter().skip(1) {
-        let cluster_mean_y: f32 = {
-            let last = clusters.last().unwrap();
-            last.iter().map(y_center).sum::<f32>() / last.len() as f32
-        };
+        let last = clusters.last().unwrap();
+        let cluster_mean_y: f32 = last.iter().map(y_center).sum::<f32>() / last.len() as f32;
 
-        if (y_center(&d) - cluster_mean_y).abs() <= y_tolerance {
+        // En plus de la tolérance fixe (15 px), on accepte tout élément qui
+        // recouvre verticalement la ligne sur au moins la moitié de sa hauteur :
+        // des centimes en exposant sont entièrement contenus dans la hauteur des
+        // gros chiffres, mais leur centre Y peut être décalé de bien plus de
+        // 15 px sur un crop haute résolution (ils étaient alors jetés).
+        let span_y1 = last.iter().map(|c| c.bbox.y1).fold(f32::INFINITY, f32::min);
+        let span_y2 = last.iter().map(|c| c.bbox.y2).fold(f32::NEG_INFINITY, f32::max);
+        let overlap = d.bbox.y2.min(span_y2) - d.bbox.y1.max(span_y1);
+        let same_line_by_overlap = overlap >= 0.5 * height(&d).min(span_y2 - span_y1);
+
+        if (y_center(&d) - cluster_mean_y).abs() <= y_tolerance || same_line_by_overlap {
             clusters.last_mut().unwrap().push(d);
         } else {
             clusters.push(vec![d]);
@@ -172,40 +182,53 @@ pub fn pick_largest_group(groups: Vec<Vec<Detection>>) -> Vec<Detection> {
 // Reconstruction de la chaîne de prix
 //--------------------------------------------------------------------------------------------------
 
-/// Détecte une séparation décimale implicite (taille/hauteur très différente
-/// entre deux chiffres consécutifs) et insère une "virgule" synthétique.
+/// Un chiffre est considéré comme "centime en exposant" si sa hauteur est
+/// inférieure à ce ratio de la hauteur des chiffres principaux qui précèdent.
+const CENTS_HEIGHT_RATIO: f32 = 0.75;
+
+fn is_separator(label: &str) -> bool {
+    matches!(label, "." | "," | "virgule")
+}
+
+fn height(d: &Detection) -> f32 {
+    d.bbox.y2 - d.bbox.y1
+}
+
+/// Détecte une séparation décimale implicite (centimes écrits plus petits /
+/// en exposant) et insère une "virgule" synthétique.
 ///
-/// NOTE: reproduit fidèlement le Python, y compris l'indexation négative de
-/// `group[p-1]` quand p==0 (qui pointe alors vers le DERNIER élément du
-/// groupe, comportement d'indexation négative Python — probable quirk non
-/// intentionnel de l'original, à confirmer).
+/// Corrige l'ancien port Python :
+///  - la référence n'est plus `group[0]` mais la hauteur MAX des chiffres
+///    principaux déjà vus (un "1" en tête faussait tout) ;
+///  - on ne compare plus la LARGEUR : un "1" est étroit et des "00" en exposant
+///    sont souvent fusionnés en une seule boîte large → test inutilisable ;
+///  - plus d'indexation négative façon Python (`group[p-1]` avec p == 0) ;
+///  - on n'invente rien si un vrai séparateur décimal existe déjà
+///    (1 ou 2 chiffres après lui).
 pub fn group_to_price_str(mut group: Vec<Detection>) -> String {
     if group.is_empty() {
         return String::new();
     }
 
-    let box_ref = group[0].bbox.clone();
+    let n = group.len();
+    let has_explicit_decimal = group.iter().enumerate().any(|(i, d)| {
+        let after = n - (i + 1);
+        is_separator(&d.class_label) && (1..=2).contains(&after)
+    });
+
     let mut insert_index: Option<usize> = None;
-
-    for p in 0..group.len().saturating_sub(1) {
-        let d = &group[p + 1]; // équivalent de group[1:][p]
-        let bx = &d.bbox;
-
-        let width_ref = box_ref.x2 - box_ref.x1;
-        let width_d = bx.x2 - bx.x1;
-        let height_ref = box_ref.y2 - box_ref.y1;
-        let height_d = bx.y2 - bx.y1;
-
-        let height_comp = height_d.min(height_ref) / height_d.max(height_ref);
-        let size_comp = width_d.min(width_ref) / width_d.max(width_ref);
-
-        // réplique group[p-1] avec indexation négative façon Python
-        let prev_idx = if p == 0 { group.len() - 1 } else { p - 1 };
-        let prev_class = &group[prev_idx].class_label;
-
-        if is_number(prev_class) && is_number(&d.class_label) && size_comp < 0.6 && height_comp < 0.6 {
-            insert_index = Some(p + 1);
-            break;
+    if !has_explicit_decimal {
+        let mut ref_height = 0.0f32;
+        for (i, d) in group.iter().enumerate() {
+            if !is_number(&d.class_label) {
+                continue;
+            }
+            let h = height(d);
+            if ref_height > 0.0 && h < CENTS_HEIGHT_RATIO * ref_height {
+                insert_index = Some(i);
+                break;
+            }
+            ref_height = ref_height.max(h);
         }
     }
 
