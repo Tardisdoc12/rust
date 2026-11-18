@@ -10,7 +10,7 @@ use serde::Deserialize;
 //--------------------------------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-struct Item { ean: serde_json::Value }
+struct Item { ean: serde_json::Value, #[serde(default)] path: Option<String> }
 #[derive(Deserialize)]
 struct Meta {
     items: Vec<Item>,
@@ -29,6 +29,7 @@ pub struct Db {
     pub codes: Vec<usize>,      // code EAN de chaque item (longueur m)
     pub idx_by_code: Vec<Vec<usize>>,
     pub code_of: HashMap<String, usize>,
+    pub paths: Vec<String>,     // chemin de la photo de chaque item (meta.json items[].path)
     pub names: HashMap<String, String>,
     pub model: String,
     pub pretrained: String,
@@ -82,7 +83,22 @@ impl Db {
         let codes: Vec<usize> = item_eans.iter().map(|e| code_of[e]).collect();
         let mut idx_by_code = vec![Vec::new(); eans.len()];
         for (i, &c) in codes.iter().enumerate() { idx_by_code[c].push(i); }
-        Ok(Self { emb, dim, m, eans, codes, idx_by_code, code_of, names: meta.names, model: meta.model, pretrained: meta.pretrained })
+        let paths: Vec<String> = meta.items.iter().map(|i| i.path.clone().unwrap_or_default()).collect();
+        Ok(Self { emb, dim, m, eans, paths, codes, idx_by_code, code_of, names: meta.names, model: meta.model, pretrained: meta.pretrained })
+    }
+
+    /// Photos de référence du produit `c` les plus proches de la requête, sans quasi-doublons (cos < dedup).
+    /// `sims` : similarités de tous les items (1er résultat de rank).
+    pub fn pick_refs(&self, sims: &[f32], c: usize, n: usize, dedup: f32) -> Vec<&str> {
+        let mut idx = self.idx_by_code[c].clone();
+        idx.sort_by(|&a, &b| sims[b].partial_cmp(&sims[a]).unwrap_or(std::cmp::Ordering::Equal));
+        let row = |i: usize| &self.emb[i * self.dim..(i + 1) * self.dim];
+        let mut chosen: Vec<usize> = Vec::new();
+        for i in idx {
+            if chosen.iter().all(|&j| row(i).iter().zip(row(j)).map(|(a, b)| a * b).sum::<f32>() < dedup) { chosen.push(i); }
+            if chosen.len() >= n { break; }
+        }
+        chosen.into_iter().map(|i| self.paths[i].as_str()).collect()
     }
 
     pub fn name(&self, c: usize) -> &str {
