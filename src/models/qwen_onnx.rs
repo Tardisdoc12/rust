@@ -8,8 +8,9 @@ use std::collections::HashMap;
 use opencv::{core::{Mat, Size, CV_32F}, imgproc, prelude::*};
 use ort::{session::Session, value::Tensor};
 use tokenizers::Tokenizer;
-use crate::models::vlm::{Part, Prompt, VlmBackend, LETTERS, NONE_LETTER};
 
+use crate::models::vlm::{Part, Prompt, VlmBackend, LETTERS, NONE_LETTER};
+use crate::functions_::setup_model_avec_cache::setup_model_avec_cache;
 
 //--------------------------------------------------------------------------------------------------
 
@@ -111,8 +112,8 @@ pub struct QwenOnnx {
 impl QwenOnnx {
     /// kv_heads / head_dim : config.json du modèle (3B : num_key_value_heads=2, hidden 2048 / 16 têtes = 128).
     /// tokens_per_second : config.vision_config.tokens_per_second.
-    pub fn new(visual: Session, embed: Session, decoder: Session, tokenizer_json: &str,
-               kv_heads: usize, head_dim: usize, tokens_per_second: i64) -> anyhow::Result<Self> {
+    pub fn new(visual_path: &str, embed_path: &str, decoder_path: &str, tokenizer_json: &str,
+               kv_heads: usize, head_dim: usize, tokens_per_second: i64, device: &str) -> anyhow::Result<Self> {
         let tok = Tokenizer::from_file(tokenizer_json).map_err(|e| anyhow::anyhow!("{e}"))?;
         let mut letter_ids = HashMap::new();
         for l in LETTERS.chars().chain(std::iter::once(NONE_LETTER)) {
@@ -121,6 +122,9 @@ impl QwenOnnx {
             letter_ids.insert(l, ids);
         }
         let pad_id = tok.token_to_id("<|image_pad|>").ok_or_else(|| anyhow::anyhow!("<|image_pad|> absent"))? as i64;
+        let visual = setup_model_avec_cache(&visual_path, device)?;
+        let embed = setup_model_avec_cache(&embed_path, device)?;
+        let decoder = setup_model_avec_cache(&decoder_path, device)?;
         // [ORT] entrées du décodeur dont le nom commence par "past_key_values" + leur type (fp16 ou fp32)
         let past = decoder.inputs.iter().filter(|i| i.name.starts_with("past_key_values"))
             .map(|i| Past { name: i.name.clone(), f16: format!("{:?}", i.input_type).contains("Float16") }).collect::<Vec<_>>();
