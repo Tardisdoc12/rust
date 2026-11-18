@@ -25,8 +25,8 @@ use crate::detections::{mask::Mask, detection_class::DetectionClass, detections:
 
 use crate::functions_::positionnement::set_all_position;
 use crate::functions_::tiled_merge::MergeConfig;
+use crate::functions_::config::{lire_config, Config};
 use crate::tools_class::label_resolver::LabelResolver;
-use crate::detections::save_reson::should_save;
 
 //--------------------------------------------------------------------------------------------------
 
@@ -80,6 +80,7 @@ const REFERENCE_REAL_CM: f32 = 10.0;
 
 #[pyclass(name = "DetectionPipeline")]
 pub struct PyDetectionPipeline {
+    config: Config,
     processor_yolo: Mutex<Processor<TiledYOLO26>>,
     identifier: Mutex<Identifier>,
     number_photos_candidates_for_vlm: usize,
@@ -92,25 +93,12 @@ pub struct PyDetectionPipeline {
 impl PyDetectionPipeline {
     #[new]
     fn new(
-        // yolo pour séparer toutes les détections d'objets
-        yolo_26_path: &str,
-        // Les différents fichiers de modèles pour SAM2
-        sam2_path_encoder: &str,
-        sam2_path_decoder: &str,
-        // Embedder => C'est le modèle pour extraire les embeddings des objets détectés
-        embedder_path: &str,
-        number_candidates: usize,
-        number_photos_candidates_for_vlm: usize,
-        // Chemin vers le dossier contenant la base d'identifiants pour l'embedder
-        identifier_base_path: &str,
-        // QwenOnnx => Modèle pour le traitement des produits difficiles à associer
-        visual_path: &str, embed_path: &str, decoder_path: &str, tokenizer_json: &str,
-        kv_heads: usize, head_dim: usize, tokens_per_second: i64,
-        // Device sur lequel exécuter les modèles (ex: "cpu" ou "cuda")
-        device: &str,
+        config_path: &str
     ) -> PyResult<Self> {
+        let config = lire_config(config_path).map_err(to_py_err)?;
+
         let resolver = LabelResolver::load().map_err(to_py_err)?;
-        // Chargement des 8 modèles EN PARALLÈLE (fichiers et sessions ONNX
+        // Chargement des modèles EN PARALLÈLE (fichiers et sessions ONNX
         // indépendants, aucune synchronisation nécessaire entre eux).
         let filter = EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| EnvFilter::new("ort=warn"));
@@ -122,27 +110,27 @@ impl PyDetectionPipeline {
                 scales: vec![1.0, 0.5],
                 merge: MergeConfig { class_groups: vec![vec![1, 2, 3, 4]], ..Default::default() },
                 ..Default::default()
-            }), yolo_26_path, device));
+            }), config.yolo_26_path, config.device));
             let h_sam2 = scope.spawn(|| -> anyhow::Result<Sam2Processor> {
                 let mut sam2 = Sam2Processor::new();
-                sam2.setup_model(sam2_path_encoder, sam2_path_decoder, device)?;
+                sam2.setup_model(config.sam2_path_encoder, config.sam2_path_decoder, config.device)?;
                 Ok(sam2)
             });
 
             let h_embbed = scope.spawn(|| -> anyhow::Result<Identifier> {
-                let mut ident = Identifier::new(identifier_base_path, number_candidates)?;          // dossier avec meta.json + embeddings.npy
-                ident.setup_model(embedder_path, device)?;
+                let mut ident = Identifier::new(config.identifier_base_path, config.number_candidates)?;          // dossier avec meta.json + embeddings.npy
+                ident.setup_model(config.embedder_path, config.device)?;
                 Ok(ident)
             });
 
             let h_backend = scope.spawn(|| -> anyhow::Result<Vlm> {
                 let backend = QwenOnnx::new(
-                    visual_path, embed_path, decoder_path,
-                    tokenizer_json, kv_heads, head_dim, tokens_per_second,
-                    device)?;
+                    config.visual_path, config.embed_path, config.decoder_path,
+                    config.tokenizer_json, config.kv_heads, config.head_dim, config.tokens_per_second,
+                    config.device)?;
                 let mut vlm = Vlm::new(Box::new(backend));
-                vlm.perms = 2;
-                vlm.early_conf = Some(0.9);
+                vlm.perms = config.perms;
+                vlm.early_conf = config.early_conf;
                 Ok(vlm)
             });
 
@@ -166,7 +154,8 @@ impl PyDetectionPipeline {
             sam2_processor: Mutex::new(sam2_processor),
             vlm: Mutex::new(backend),
             identifier: Mutex::new(identifier),
-            number_photos_candidates_for_vlm,
+            config,
+            config.number_photos_candidates_for_vlm,
             resolver,
         })
     }
@@ -274,8 +263,13 @@ impl PyDetectionPipeline {
     }
 
     fn classify_produit(&self, detection: &mut Detection, h: Option<&Mat>, has_ref: bool) {
-        let gate = Gate { accept_sim: 0.80, accept_margin: 0.10, reject_sim: 0.35, cand_margin: Some(0.15) };
-        match ident.route(&detection.mask.mat, &gate, self.number_photos_candidates_for_vlm)? {
+        let gate = Gate { 
+            accept_sim: self.config.accept_sim,
+            accept_margin: self.config.accept_margin,
+            reject_sim: self.config.reject_sim,
+            cand_margin: self.config.cand_margin
+        };
+        match self.identify.route(&detection.mask.mat, &gate, self.number_photos_candidates_for_vlm)? {
             Route::Accept { ean, name, sim, margin } => {
                 detection.label = ean.clone();
                 detection.conf = sim;
@@ -285,7 +279,7 @@ impl PyDetectionPipeline {
                 detection.conf = 1 - sim;
             },
             Route::Ask { cands, sim, margin } => {
-                let r = vlm.process_product(&detection.mask.mat, &cands)?;
+                let r = self.vlm.process_product(&detection.mask.mat, &cands)?;
                 match &r.ean {
                     Some(ean) => {
                         detection.label = ean.clone();
