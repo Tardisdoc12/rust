@@ -1,8 +1,8 @@
 pub mod model_core;
-pub mod inceptionv3;
-pub mod efficientnetb2;
 pub mod yolo_26;
-pub mod yolo_v7;
-pub mod cnn_digit;
 pub mod sam2;
 pub mod tiled_yolo_26;
+pub mod vlm;
+pub mod qwen_onnx;
+pub mod database;
+pub mod embedders;
