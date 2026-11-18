@@ -32,6 +32,8 @@ impl Embedder {
     }
 }
 
+//--------------------------------------------------------------------------------------------------
+
 impl ModelPipeline for Embedder {
     type Output = Vec<f32>;
 
@@ -117,6 +119,8 @@ impl ModelPipeline for Embedder {
     }
 }
 
+//--------------------------------------------------------------------------------------------------
+
 impl Embedder {
     /// Une image -> 1152 floats normalisés.
     pub fn embed(&mut self, image: &Mat) -> anyhow::Result<Vec<f32>> {
@@ -134,9 +138,6 @@ impl Embedder {
     }
 }
 
-/// kNN : galerie = Vec<f32> aplati (m*1152, normalisé, ex. embeddings.npy), requête normalisée.
-pub fn top1(gallery: &[f32], q: &[f32]) -> (usize, f32) {
-    gallery.chunks(DIM).enumerate()
-        .map(|(i, g)| (i, g.iter().zip(q).map(|(a, b)| a * b).sum::<f32>()))
-        .fold((0, f32::MIN), |b, c| if c.1 > b.1 { c } else { b })
-}
+//--------------------------------------------------------------------------------------------------
+// END OF FILE
+//--------------------------------------------------------------------------------------------------
