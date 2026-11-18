@@ -15,6 +15,9 @@ use std::io::BufReader;
 #[serde(deny_unknown_fields)]
 struct Config {
 
+    #[serde(default = "device_par_defaut")]
+    device: &str,
+
     // Seuil de similarité pour accepter ou non une correspondance
     accept_sim: f32,
     accept_margin: f32,
@@ -54,6 +57,10 @@ struct Config {
     head_dim: usize,
     #[serde(default = "tokens_per_second_par_defaut")]
     tokens_per_second: i64,
+
+    // perms et early_conf pour le VLM
+    perms: Option<usize>,
+    early_conf: Option<f32>,
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -72,6 +79,10 @@ pub fn lire_config(chemin: &str) -> Result<Config, Box<dyn Error>> {
 //--------------------------------------------------------------------------------------------------
 
 // Valeurs par défaut pour les différents paramètres de configuration
+
+fn device_par_defaut() -> &'static str {
+    "cuda"
+}
 
 fn kv_heads_par_defaut() -> usize {
     2
