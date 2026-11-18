@@ -15,19 +15,14 @@ use tracing_subscriber::EnvFilter;
 use crate::processor::processor::Processor;
 use crate::models::model_core::ModelPipeline;
 use crate::models::{
-    cnn_digit::CNNDigit,
-    inceptionv3::InceptionV3,
-    efficientnetb2::EfficientNetB2,
     tiled_yolo_26::{TiledYOLO26, TiledConfig},
     sam2::Sam2Processor,
-    yolo_v7::Yolov7PriceTag,
-    yolo_26::YOLO26
+    yolo_26::YOLO26,
+    qwen_onnx::QwenOnnx,
+    identifier::{Gate, Identifier, Route},
 };
 use crate::detections::{mask::Mask, detection_class::DetectionClass, detections::Detection};
-use crate::functions_::functions_ocr::{
-    Detection as OcrDetection, BoundingBox, PriceResult, group_to_price_str,
-};
-use crate::functions_::utils::{safe_float, clean_double_dot, clean_thousand_dot, compute_homography_from_reference};
+
 use crate::functions_::positionnement::set_all_position;
 use crate::functions_::tiled_merge::MergeConfig;
 use crate::tools_class::label_resolver::LabelResolver;
@@ -86,11 +81,9 @@ const REFERENCE_REAL_CM: f32 = 10.0;
 #[pyclass(name = "DetectionPipeline")]
 pub struct PyDetectionPipeline {
     processor_yolo: Mutex<Processor<TiledYOLO26>>,
-    processor_yolo_price_tag: Mutex<Processor<YOLO26>>,
-    processor_inception: Mutex<Processor<InceptionV3>>,
-    processor_efficientnet: Mutex<Processor<EfficientNetB2>>,
-    processor_yolo_ocr: Mutex<Processor<Yolov7PriceTag>>,
-    processor_cnn_digit: Mutex<Processor<CNNDigit>>,
+    identifier: Mutex<Identifier>,
+    number_photos_candidates_for_vlm: usize,
+    vlm: Mutex<Vlm>,
     sam2_processor: Mutex<Sam2Processor>,
     resolver: LabelResolver,
 }
@@ -99,14 +92,21 @@ pub struct PyDetectionPipeline {
 impl PyDetectionPipeline {
     #[new]
     fn new(
+        // yolo pour séparer toutes les détections d'objets
         yolo_26_path: &str,
-        yolo_v7_path: &str,
+        // Les différents fichiers de modèles pour SAM2
         sam2_path_encoder: &str,
         sam2_path_decoder: &str,
-        cnn_digit_path: &str,
-        inceptionv3_path: &str,
-        efficientnetb2_path: &str,
-        yolo_26_price_tag_path: &str,
+        // Embedder => C'est le modèle pour extraire les embeddings des objets détectés
+        embedder_path: &str,
+        number_candidates: usize,
+        number_photos_candidates_for_vlm: usize,
+        // Chemin vers le dossier contenant la base d'identifiants pour l'embedder
+        identifier_base_path: &str,
+        // QwenOnnx => Modèle pour le traitement des produits difficiles à associer
+        visual_path: &str, embed_path: &str, decoder_path: &str, tokenizer_json: &str,
+        kv_heads: usize, head_dim: usize, tokens_per_second: i64,
+        // Device sur lequel exécuter les modèles (ex: "cpu" ou "cuda")
         device: &str,
     ) -> PyResult<Self> {
         let resolver = LabelResolver::load().map_err(to_py_err)?;
@@ -123,58 +123,58 @@ impl PyDetectionPipeline {
                 merge: MergeConfig { class_groups: vec![vec![1, 2, 3, 4]], ..Default::default() },
                 ..Default::default()
             }), yolo_26_path, device));
-            let h_yolo_pt = scope.spawn(|| Processor::new(YOLO26::new(), yolo_26_price_tag_path, device));
-            let h_incep = scope.spawn(|| Processor::new(InceptionV3::new(), inceptionv3_path, device));
-            let h_effnet = scope.spawn(|| Processor::new(EfficientNetB2::new(), efficientnetb2_path, device));
-            let h_ocr = scope.spawn(|| Processor::new(Yolov7PriceTag::new(), yolo_v7_path, device));
-            let h_digit = scope.spawn(|| Processor::new(CNNDigit::new(), cnn_digit_path, device));
             let h_sam2 = scope.spawn(|| -> anyhow::Result<Sam2Processor> {
                 let mut sam2 = Sam2Processor::new();
                 sam2.setup_model(sam2_path_encoder, sam2_path_decoder, device)?;
                 Ok(sam2)
             });
 
+            let h_embbed = scope.spawn(|| -> anyhow::Result<Identifier> {
+                let mut ident = Identifier::new(identifier_base_path, number_candidates)?;          // dossier avec meta.json + embeddings.npy
+                ident.setup_model(embedder_path, device)?;
+                Ok(ident)
+            });
+
+            let h_backend = scope.spawn(|| -> anyhow::Result<Vlm> {
+                let backend = QwenOnnx::new(
+                    visual_path, embed_path, decoder_path,
+                    tokenizer_json, kv_heads, head_dim, tokens_per_second,
+                    device)?;
+                let mut vlm = Vlm::new(Box::new(backend));
+                vlm.perms = 2;
+                vlm.early_conf = Some(0.9);
+                Ok(vlm)
+            });
+
             Ok((
                 h_yolo.join().map_err(|_| anyhow::anyhow!("thread yolo a paniqué"))??,
-                h_yolo_pt.join().map_err(|_| anyhow::anyhow!("thread yolo_price_tag a paniqué"))??,
-                h_incep.join().map_err(|_| anyhow::anyhow!("thread inception a paniqué"))??,
-                h_effnet.join().map_err(|_| anyhow::anyhow!("thread efficientnet a paniqué"))??,
-                h_ocr.join().map_err(|_| anyhow::anyhow!("thread yolo_ocr a paniqué"))??,
-                h_digit.join().map_err(|_| anyhow::anyhow!("thread cnn_digit a paniqué"))??,
                 h_sam2.join().map_err(|_| anyhow::anyhow!("thread sam2 a paniqué"))??,
+                h_backend.join().map_err(|_| anyhow::anyhow!("thread backend a paniqué"))??,
+                h_embbed.join().map_err(|_| anyhow::anyhow!("thread embedder a paniqué"))??,
             ))
         });
 
         let (
             processor_yolo,
-            processor_yolo_price_tag,
-            processor_inception,
-            processor_efficientnet,
-            processor_yolo_ocr,
-            processor_cnn_digit,
             sam2_processor,
+            backend,
+            identifier
         ) = result.map_err(to_py_err)?;
 
         Ok(Self {
             processor_yolo: Mutex::new(processor_yolo),
-            processor_yolo_price_tag: Mutex::new(processor_yolo_price_tag),
-            processor_inception: Mutex::new(processor_inception),
-            processor_efficientnet: Mutex::new(processor_efficientnet),
-            processor_yolo_ocr: Mutex::new(processor_yolo_ocr),
-            processor_cnn_digit: Mutex::new(processor_cnn_digit),
             sam2_processor: Mutex::new(sam2_processor),
+            vlm: Mutex::new(backend),
+            identifier: Mutex::new(identifier),
+            number_photos_candidates_for_vlm,
             resolver,
         })
     }
 
     fn unload(&self) {
         let _ = self.processor_yolo.lock().map(|mut p| p.unload());
-        let _ = self.processor_yolo_price_tag.lock().map(|mut p| p.unload());
-        let _ = self.processor_inception.lock().map(|mut p| p.unload());
-        let _ = self.processor_efficientnet.lock().map(|mut p| p.unload());
-        let _ = self.processor_yolo_ocr.lock().map(|mut p| p.unload());
-        let _ = self.processor_cnn_digit.lock().map(|mut p| p.unload());
         let _ = self.sam2_processor.lock().map(|mut p| p.unload());
+        let _ = self.identifier.lock().map(|mut i| i.unload());
     }
 
     /// Traite une image. Les modèles déjà chargés sont réutilisés — appelez
@@ -274,47 +274,37 @@ impl PyDetectionPipeline {
     }
 
     fn classify_produit(&self, detection: &mut Detection, h: Option<&Mat>, has_ref: bool) {
-       let result_inception = match process_locked(&self.processor_inception, &detection.mask.mat) {
-            Ok(r) => r,
-            Err(e) => { eprintln!("[produit] inception: {e:#}"); return; }
-        };
-        let result_efficient = match process_locked(&self.processor_efficientnet, &detection.mask.mat) {
-            Ok(r) => r,
-            Err(e) => { eprintln!("[produit] efficientnet: {e:#}"); return; }
-        };
-
-        if let Some(reason) = should_save(&result_inception, &result_efficient) {
-            detection.reason_saving = Some(reason.as_str().to_string());
-            detection.classification_saving = if result_inception.score > result_efficient.score {
-                result_inception.class_label.clone()
-            } else {
-                result_efficient.class_label.clone()
-            };
-        }
-
-        let label_inception = result_inception.class_label;
-        let score_inception = result_inception.score;
-        let label_efficient = result_efficient.class_label;
-        let score_efficient = result_efficient.score;
-        let energy_efficient = result_efficient.energy;
-        
-        if score_inception >= 0.996 && energy_efficient < -3.0 {
-            detection.label = label_inception;
-            detection.score = score_inception;
-        } else if score_inception >= 0.57 {
-            detection.label = if score_efficient >= 0.23 && energy_efficient < -3.0 { label_efficient } else { "OOB".to_string() };
-            detection.score = score_efficient;
-        } else {
-            detection.label = "OOB".to_string();
-            detection.score = 0.0;
-            if energy_efficient < -5.0 && score_efficient > 0.5 {
-                detection.label = label_efficient;
-                detection.score = score_efficient;
+        let gate = Gate { accept_sim: 0.80, accept_margin: 0.10, reject_sim: 0.35, cand_margin: Some(0.15) };
+        match ident.route(&detection.mask.mat, &gate, self.number_photos_candidates_for_vlm)? {
+            Route::Accept { ean, name, sim, margin } => {
+                detection.label = ean.clone();
+                detection.conf = sim;
+            },
+            Route::Reject { sim } => {
+                detection.label = "OOB".to_string();
+                detection.conf = 1 - sim;
+            },
+            Route::Ask { cands, sim, margin } => {
+                let r = vlm.process_product(&detection.mask.mat, &cands)?;
+                match &r.ean {
+                    Some(ean) => {
+                        detection.label = ean.clone();
+                        detection.conf = r.conf;
+                        println!("VLM : {ean} (conf {:.2}, ordres d'accord {}) [sim {sim:.3}, écart {margin:.3}]", r.conf, r.agree);
+                    },
+                    None => {
+                        detection.label = "OOB".to_string();
+                        detection.conf = 1.0 - r.conf;
+                        println!("VLM : aucun des candidats (OOB {:.2})", r.conf);
+                    },
+                }
             }
         }
+
         if !has_ref {
-            return
+            return;
         }
+
         match self.predict_mask(detection.bbox.xyxyn()) {
             Ok(mask) => detection.mask._mat_bin = mask._mat_bin,
             Err(e) => eprintln!("[produit] sam2: {e:#}"),
