@@ -309,7 +309,7 @@ impl PyDetectionPipeline {
         }
 
         if !has_ref {
-            return;
+            return Ok(());
         }
 
         match self.predict_mask(detection.bbox.xyxyn()) {
