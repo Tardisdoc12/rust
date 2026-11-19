@@ -62,8 +62,10 @@ pub struct Config {
     pub tokens_per_second: i64,
 
     // perms et early_conf pour le VLM
-    pub perms: Option<usize>,
-    pub early_conf: Option<f32>,
+    #[serde(default = "perms_par_defaut")]
+    pub perms: usize,
+    #[serde(default = "early_conf_par_defaut")]
+    pub early_conf: f32,
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -105,6 +107,14 @@ fn nbr_cdt_par_defaut() -> usize {
 
 fn tokens_per_second_par_defaut() -> i64 {
     2
+}
+
+fn perms_par_defaut() -> usize {
+    2
+}
+
+fn early_conf_par_defaut() -> f32 {
+    0.9
 }
 
 //--------------------------------------------------------------------------------------------------
