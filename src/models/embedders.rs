@@ -6,7 +6,7 @@
 
 use opencv::{core::{Mat, Size, CV_32F}, imgproc, prelude::*};
 use ort::session::Session;
-use ort::value::{Value, Tensor};
+use ort::value::Tensor;
 
 use crate::models::model_core::ModelPipeline;
 use crate::functions_::setup_model_avec_cache::setup_model_avec_cache;
