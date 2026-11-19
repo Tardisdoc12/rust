@@ -44,8 +44,6 @@ fn to_py_err(e: anyhow::Error) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
 }
 
-/// Verrouille l'appel COMPLET à `.process()` (preprocess + infer +
-/// postprocess), pas seulement l'inférence — voir la note en tête de fichier.
 fn process_locked<M: ModelPipeline>(
     processor: &Mutex<Processor<M>>,
     image: &Mat,
@@ -54,22 +52,6 @@ fn process_locked<M: ModelPipeline>(
         .lock()
         .map_err(|_| anyhow::anyhow!("Mutex empoisonné (un thread a paniqué en tenant le verrou)"))?
         .process(image)
-}
-
-fn is_digit_class(label: &str) -> bool {
-    label.len() == 1 && label.chars().next().map_or(false, |c| c.is_ascii_digit())
-}
-
-fn crop_from_bbox(mat: &Mat, bbox: &BoundingBox) -> anyhow::Result<Mat> {
-    let largeur = mat.cols();
-    let hauteur = mat.rows();
-    let x1 = (bbox.x1 as i32).max(0);
-    let y1 = (bbox.y1 as i32).max(0);
-    let x2 = (bbox.x2 as i32).min(largeur);
-    let y2 = (bbox.y2 as i32).min(hauteur);
-    let rect = Rect::new(x1, y1, (x2 - x1).max(1), (y2 - y1).max(1));
-    let roi = Mat::roi(mat, rect)?;
-    roi.try_clone().map_err(Into::into)
 }
 
 fn dist2(a: (f32, f32), b: (f32, f32)) -> f32 {
