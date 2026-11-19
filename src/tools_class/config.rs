@@ -13,7 +13,7 @@ use std::io::BufReader;
 
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
-struct Config {
+pub struct Config {
 
     #[serde(default = "device_par_defaut")]
     pub device: String,
