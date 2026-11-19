@@ -27,7 +27,7 @@ pub struct Candidate {
     pub refs: Vec<Mat>,          // photos de référence (BGR, comme imread) ; 1 à 3 suffisent
 }
 
-#[derive(Debug, Clone, Send)]
+#[derive(Debug, Clone)]
 pub struct VlmResult {
     pub ean: Option<String>,     // None = "aucun de ces produits" (OOB)
     pub conf: f32,               // probabilité moyenne du vainqueur (pas une garantie d'exactitude)
