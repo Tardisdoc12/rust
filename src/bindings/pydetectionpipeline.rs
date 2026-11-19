@@ -329,7 +329,7 @@ impl PyDetectionPipeline {
         let best_price_f32 = result.price as f32;
         if best_price_f32.is_none() {
             detection.price = 0.0 as f32;
-            return;
+            return Ok(());
         }
         detection.price = best_price_f32.unwrap();
     }
@@ -343,7 +343,7 @@ impl PyDetectionPipeline {
         let best_price_f32 = result.price as f32;
         if best_price_f32.is_none() {
             detection.price = 0.0 as f32;
-            return;
+            return Ok(());
         }
         detection.price = best_price_f32.unwrap();
     }
