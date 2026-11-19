@@ -11,6 +11,7 @@ use numpy::PyReadonlyArray3;
 use opencv::core::{Mat, Rect};
 use opencv::prelude::MatTraitConst;
 use tracing_subscriber::EnvFilter;
+use serde::ser::StdError;
 
 use crate::processor::processor::Processor;
 use crate::models::model_core::ModelPipeline;
