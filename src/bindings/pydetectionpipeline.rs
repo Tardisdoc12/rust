@@ -130,7 +130,7 @@ impl PyDetectionPipeline {
             let h_florence = scope.spawn(|| Processor::new(Florence::new(), &config.florence_path, &config.device));
 
             let h_embbed = scope.spawn(|| -> anyhow::Result<Identifier> {
-                let mut ident = Identifier::new(&config.identifier_base_path, config.number_candidates)?;          // dossier avec meta.json + embeddings.npy
+                let mut ident = Identifier::new(&config.identifier_base_path, config.number_candidate)?;          // dossier avec meta.json + embeddings.npy
                 ident.setup_model(&config.embedder_path, &config.device)?;
                 Ok(ident)
             });

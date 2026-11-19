@@ -5,6 +5,7 @@
 //--------------------------------------------------------------------------------------------------
 
 use opencv::{core::Mat, imgcodecs};
+use opencv::prelude::MatTraitConst;
 
 use crate::models::{
     vlm::Candidate as VlmCandidate,
