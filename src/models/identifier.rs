@@ -8,7 +8,7 @@ use opencv::{core::Mat, imgcodecs};
 
 use crate::models::{
     vlm::Candidate as VlmCandidate,
-    db::Db,
+    database::Db,
     embedders::Embedder,
     model_core::ModelPipeline
 };

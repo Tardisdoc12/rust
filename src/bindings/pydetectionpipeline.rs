@@ -160,9 +160,9 @@ impl PyDetectionPipeline {
             identifier: Mutex::new(identifier),
             florence: Mutex::new(florence),
             config,
-            config.number_photos_candidates_for_vlm,
+            number_photos_candidates_for_vlm: config.number_photos_candidates_for_vlm,
             resolver,
-        })
+        });
     }
 
     fn unload(&self) {
