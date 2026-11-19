@@ -28,6 +28,7 @@ use crate::functions_::positionnement::set_all_position;
 use crate::functions_::tiled_merge::MergeConfig;
 use crate::tools_class::config::{lire_config, Config};
 use crate::tools_class::label_resolver::LabelResolver;
+use crate::functions_::utils::compute_homography_from_reference;
 
 //--------------------------------------------------------------------------------------------------
 
