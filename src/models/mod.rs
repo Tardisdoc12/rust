@@ -7,3 +7,4 @@ pub mod qwen_onnx;
 pub mod database;
 pub mod embedders;
 pub mod identifier;
+pub mod florence;
