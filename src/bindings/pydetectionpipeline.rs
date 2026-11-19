@@ -256,7 +256,6 @@ impl PyDetectionPipeline {
         for (idx, price) in assignments {
             vec_detections[idx].price = price;
         }
-        vec_detections.extend(new_etiquettes);
         if number_etiquette >= 2{
             set_all_position(&mut vec_detections);
         }
@@ -281,7 +280,7 @@ impl PyDetectionPipeline {
             cand_margin: self.config.cand_margin
         };
         match self.identifier.lock().unwrap().route(&detection.mask.mat, &gate, self.number_photos_candidates_for_vlm)? {
-            Route::Accept { ean, name, sim, _ } => {
+            Route::Accept { ean, .., sim, .. } => {
                 detection.label = ean.clone();
                 detection.score = sim;
             },
