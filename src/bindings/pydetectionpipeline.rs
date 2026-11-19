@@ -11,7 +11,6 @@ use numpy::PyReadonlyArray3;
 use opencv::core::{Mat, Rect};
 use opencv::prelude::MatTraitConst;
 use tracing_subscriber::EnvFilter;
-use serde::ser::StdError;
 
 use crate::processor::processor::Processor;
 use crate::models::model_core::ModelPipeline;
@@ -107,7 +106,7 @@ impl PyDetectionPipeline {
     fn new(
         config_path: &str
     ) -> PyResult<Self> {
-        let config = lire_config(config_path)?;
+        let config = lire_config(config_path).map_err(|e| PyRuntimeError::new_err(format!("config {config_path}: {e}")))?;
 
         let resolver = LabelResolver::load().map_err(to_py_err)?;
         // Chargement des modèles EN PARALLÈLE (fichiers et sessions ONNX
