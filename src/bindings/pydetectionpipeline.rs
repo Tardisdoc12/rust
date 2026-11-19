@@ -326,13 +326,9 @@ impl PyDetectionPipeline {
     }
 
     fn classify_etiquette(&self, detection: &mut Detection) -> anyhow::Result<()> {
-        let result = process_locked(&self.florence, &detection.mask.mat) else { return Ok(()); };
-        let best_price_f32 = result.unwrap().price;
-        if best_price_f32.is_none() {
-            detection.price = 0.0 as f32;
-            return Ok(());
-        }
-        detection.price = best_price_f32.unwrap();
+        let Ok(result) = process_locked(&self.florence, &detection.mask.mat) else { return Ok(()); };
+        let best_price_f32 = result.price as f32;
+        detection.price = best_price_f32;
     }
 
     /// Renvoie l'étiquette (prix) trouvée dans la publicité, si elle existe.
@@ -340,13 +336,9 @@ impl PyDetectionPipeline {
         &self,
         detection: &Detection,
     ) -> anyhow::Result<()> {
-        let result = process_locked(&self.florence, &detection.mask.mat) else { return Ok(()); };
-        let best_price_f32 = result.price;
-        if best_price_f32.is_none() {
-            detection.price = 0.0 as f32;
-            return Ok(());
-        }
-        detection.price = best_price_f32.unwrap();
+        let Ok(result) = process_locked(&self.florence, &detection.mask.mat) else { return Ok(()); };
+        
+        detection.price = result.price as f32;
     }
 
     fn classify_reference(&self, detection: &mut Detection) -> anyhow::Result<Option<(Mat, f32)>> {
