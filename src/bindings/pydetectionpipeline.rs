@@ -322,6 +322,7 @@ impl PyDetectionPipeline {
                 detection.set_size(width_cm, height_cm);
             }
         }
+        Ok(())
     }
 
     fn classify_etiquette(&self, detection: &mut Detection) -> anyhow::Result<()> {
@@ -340,7 +341,7 @@ impl PyDetectionPipeline {
         detection: &Detection,
     ) -> anyhow::Result<()> {
         let Ok(result) = process_locked(&self.florence, &detection.mask.mat) else { return };
-        let best_price_f32 = result.price as f32;
+        let best_price_f32 = result.price;
         if best_price_f32.is_none() {
             detection.price = 0.0 as f32;
             return Ok(());
