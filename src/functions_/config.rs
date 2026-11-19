@@ -38,6 +38,9 @@ struct Config {
 
     // Chemin vers le modèle YOLO 26
     yolo_26_path: &str,
+
+    // Chemin vers le modèle Florence
+    florence_path: &str,
     
     // Les différents fichiers de modèles pour SAM2
     sam2_path_encoder: &str,
