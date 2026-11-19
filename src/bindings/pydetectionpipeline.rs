@@ -96,7 +96,7 @@ pub struct PyDetectionPipeline {
     number_photos_candidates_for_vlm: usize,
     vlm: Mutex<Vlm>,
     sam2_processor: Mutex<Sam2Processor>,
-    florence: Mutex<Florence>,
+    florence: Mutex<Processor<Florence>>,
     resolver: LabelResolver,
 }
 
