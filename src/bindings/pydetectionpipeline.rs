@@ -324,7 +324,7 @@ impl PyDetectionPipeline {
         }
     }
 
-    fn classify_etiquette(&self, detection: &mut Detection) {
+    fn classify_etiquette(&self, detection: &mut Detection) -> anyhow::Result<()> {
         let Ok(result) = process_locked(&self.florence, &detection.mask.mat) else { return };
         let best_price_f32 = result.price as f32;
         if best_price_f32.is_none() {
@@ -338,7 +338,7 @@ impl PyDetectionPipeline {
     fn classify_publicity(
         &self,
         detection: &Detection,
-    ) -> anyhow::Result<Option<Detection>> {
+    ) -> anyhow::Result<()> {
         let Ok(result) = process_locked(&self.florence, &detection.mask.mat) else { return };
         let best_price_f32 = result.price as f32;
         if best_price_f32.is_none() {
