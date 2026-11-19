@@ -121,25 +121,25 @@ impl PyDetectionPipeline {
                 scales: vec![1.0, 0.5],
                 merge: MergeConfig { class_groups: vec![vec![1, 2, 3, 4]], ..Default::default() },
                 ..Default::default()
-            }), config.yolo_26_path, config.device));
+            }), &config.yolo_26_path, &config.device));
             let h_sam2 = scope.spawn(|| -> anyhow::Result<Sam2Processor> {
                 let mut sam2 = Sam2Processor::new();
-                sam2.setup_model(config.sam2_path_encoder, config.sam2_path_decoder, config.device)?;
+                sam2.setup_model(&config.sam2_path_encoder, &config.sam2_path_decoder, &config.device)?;
                 Ok(sam2)
             });
-            let h_florence = scope.spawn(|| Processor::new(Florence::new(), config.florence_path, config.device));
+            let h_florence = scope.spawn(|| Processor::new(Florence::new(), &config.florence_path, &config.device));
 
             let h_embbed = scope.spawn(|| -> anyhow::Result<Identifier> {
-                let mut ident = Identifier::new(config.identifier_base_path, config.number_candidates)?;          // dossier avec meta.json + embeddings.npy
-                ident.setup_model(config.embedder_path, config.device)?;
+                let mut ident = Identifier::new(&config.identifier_base_path, config.number_candidates)?;          // dossier avec meta.json + embeddings.npy
+                ident.setup_model(&config.embedder_path, &config.device)?;
                 Ok(ident)
             });
 
             let h_backend = scope.spawn(|| -> anyhow::Result<Vlm> {
                 let backend = QwenOnnx::new(
-                    config.visual_path, config.embed_path, config.decoder_path,
-                    config.tokenizer_json, config.kv_heads, config.head_dim, config.tokens_per_second,
-                    config.device)?;
+                    &config.visual_path, &config.embed_path, &config.decoder_path,
+                    &config.tokenizer_json, config.kv_heads, config.head_dim, config.tokens_per_second,
+                    &config.device)?;
                 let mut vlm = Vlm::new(Box::new(backend));
                 vlm.perms = config.perms;
                 vlm.early_conf = config.early_conf;
