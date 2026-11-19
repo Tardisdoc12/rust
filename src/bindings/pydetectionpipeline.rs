@@ -292,7 +292,7 @@ impl PyDetectionPipeline {
                 detection.score = 1.0 - sim;
             },
             Route::Ask { cands, sim, margin } => {
-                let r = self.vlm.process_product(&detection.mask.mat, &cands)?;
+                let r = self.vlm.lock().unwrap().process_product(&detection.mask.mat, &cands)?;
                 match &r.ean {
                     Some(ean) => {
                         detection.label = ean.clone();
