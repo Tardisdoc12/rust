@@ -201,13 +201,16 @@ impl PyDetectionPipeline {
                 DetectionClass::Etiquette => {
                     number_etiquette += 1;
                     detection.label = "PL".to_string();
+                    detection.master_product_id = self.resolver.get_master_product_id(&detection.label).unwrap_or_default();
                 }
                 DetectionClass::Publicity => {
                     detection.label = "AD".to_string();
+                    detection.master_product_id = self.resolver.get_master_product_id(&detection.label).unwrap_or_default();
                 }
                 DetectionClass::NoProduct => {
                     detection.label = "ES".to_string();
                     objects.push((i, detection.bbox.center_rel()));
+                    detection.master_product_id = self.resolver.get_master_product_id(&detection.label).unwrap_or_default();
                 }
                 _ => objects.push((i, detection.bbox.center_rel())),
             }
@@ -229,21 +232,15 @@ impl PyDetectionPipeline {
                     if let Some(idx) = nearest_object(&objects, detection.bbox.center_rel()) {
                         assignments.push((idx, detection.price));
                     }
-                    detection.master_product_id = self.resolver.get_master_product_id(&detection.label).unwrap_or_default();
                 }
                 DetectionClass::Publicity => {
-                    if let Ok(Some(mut etiquette)) = self.classify_publicity(detection, img_shape) {
-                        if let Some(idx) = nearest_object(&objects, etiquette.bbox.center_rel()) {
-                            assignments.push((idx, etiquette.price));
+                    self.classify_publicity(detection);
+                    if detection.price > 0.0 {
+                        number_etiquette += 1;
+                        if let Some(idx) = nearest_object(&objects, detection.bbox.center_rel()) {
+                            assignments.push((idx, detection.price));
                         }
-                        etiquette.label = "PL".to_string();
-                        etiquette.master_product_id = self.resolver.get_master_product_id(&etiquette.label).unwrap_or_default();
-                        new_etiquettes.push(etiquette);
                     }
-                    detection.master_product_id = self.resolver.get_master_product_id(&detection.label).unwrap_or_default();
-                }
-                DetectionClass::NoProduct => {
-                    detection.master_product_id = self.resolver.get_master_product_id(&detection.label).unwrap_or_default();
                 }
                 _ => {}
             }
@@ -319,39 +316,13 @@ impl PyDetectionPipeline {
     }
 
     fn classify_etiquette(&self, detection: &mut Detection) {
-        let Ok(candidate_boxes) = process_locked(&self.processor_yolo_price_tag, &detection.mask.mat) else { return };
-
-        let crops: Vec<Mat> = if candidate_boxes.is_empty() {
-            match detection.mask.mat.try_clone() {
-                Ok(m) => vec![m],
-                Err(_) => return,
-            }
-        } else {
-            candidate_boxes
-                .iter()
-                .filter_map(|b| {
-                    let (x1, y1, x2, y2) = b.bbox.xyxy();
-                    detection
-                        .mask
-                        .get_subpart_mat((x1 as i32, y1 as i32, x2 as i32, y2 as i32))
-                        .ok()
-                })
-                .collect()
-        };
-
-        let mut best_price_str = String::new();
-        let mut best_price_val = f32::MIN;
-
-        for crop in &crops {
-            let price_str = self.compute_price_on_crop(crop);
-            let value = safe_float(&price_str);
-            if value > best_price_val {
-                best_price_val = value;
-                best_price_str = price_str;
-            }
+        let Ok(result) = process_locked(&self.florence, &detection.mask.mat) else { return };
+        let best_price_f32 = result.price;
+        if best_price_f32.is_none() {
+            detection.price = 0.0 as f32;
+            return;
         }
-
-        detection.price = safe_float(&best_price_str);
+        detection.price = best_price_f32.unwrap();
     }
 
     /// Renvoie l'étiquette (prix) trouvée dans la publicité, si elle existe.
@@ -360,61 +331,19 @@ impl PyDetectionPipeline {
         detection: &Detection,
         img_shape: (usize, usize),
     ) -> anyhow::Result<Option<Detection>> {
-        let Ok(new_results) = process_locked(&self.processor_yolo_price_tag, &detection.mask.mat) else {
-            return Ok(None);
-        };
-
-        let best_detection = new_results
-            .iter()
-            .filter(|d| d.categorie == DetectionClass::Price)
-            .max_by(|a, b| a.score.total_cmp(&b.score))
-            .cloned();
-
-        let Some(mut best) = best_detection else { return Ok(None) };
-
-        // offset du crop publicity dans l'image complète
-        let (px1, py1, _, _) = detection.bbox.xyxy();
-        best.bbox = best.bbox.translate(px1, py1, img_shape);
-        best.categorie = DetectionClass::Etiquette;
-
-        self.classify_etiquette(&mut best);
-        Ok(Some(best))
+        let Ok(result) = process_locked(&self.florence, &detection.mask.mat) else { return };
+        let best_price_f32 = result.price;
+        if best_price_f32.is_none() {
+            detection.price = 0.0 as f32;
+            return;
+        }
+        detection.price = best_price_f32.unwrap();
     }
 
     fn classify_reference(&self, detection: &mut Detection) -> anyhow::Result<Option<(Mat, f32)>> {
         let mask = self.predict_mask(detection.bbox.xyxyn())?;
         detection.mask._mat_bin = mask._mat_bin;
         compute_homography_from_reference(&detection.mask, REFERENCE_REAL_CM)
-    }
-
-
-    fn compute_price_on_crop(&self, crop: &Mat) -> String {
-        let price_result: PriceResult = match process_locked(&self.processor_yolo_ocr, crop) {
-            Ok(r) => r,
-            Err(_) => return String::new(),
-        };
-
-        let corrected_group: Vec<OcrDetection> = price_result
-            .detections
-            .into_iter()
-            .map(|mut d| {
-                if is_digit_class(&d.class_label) {
-                    if let Ok(sub_crop) = crop_from_bbox(crop, &d.bbox) {
-                        if let Ok(result_cnn) = process_locked(&self.processor_cnn_digit, &sub_crop) {
-                            if d.score < result_cnn.confidence {
-                                d.class_label = result_cnn.digit.to_string();
-                                d.score = result_cnn.confidence;
-                            }
-                        }
-                    }
-                }
-                d
-            })
-            .collect();
-
-        let price_str = group_to_price_str(corrected_group);
-        let price_str = clean_double_dot(&price_str);
-        clean_thousand_dot(&price_str)
     }
 }
 
