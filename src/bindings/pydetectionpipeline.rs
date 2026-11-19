@@ -169,7 +169,7 @@ impl PyDetectionPipeline {
             vlm: Mutex::new(backend),
             identifier: Mutex::new(identifier),
             florence: Mutex::new(florence),
-            config,
+            config: config.clone(),
             number_photos_candidates_for_vlm: config.number_photos_candidates_for_vlm,
             resolver,
         })
@@ -187,8 +187,7 @@ impl PyDetectionPipeline {
     fn process(&self, image: PyReadonlyArray3<'_, u8>) -> PyResult<Vec<Detection>> {
         let mut image_rust = Mask::new();
         image_rust.setup_from_python(image)?;
-        let img_shape = (image_rust.mat.rows() as usize, image_rust.mat.cols() as usize);
-
+       
         // --- Étape 1 : détection principale
         
         let mut vec_detections = process_locked(&self.processor_yolo, &image_rust.mat)
@@ -228,7 +227,6 @@ impl PyDetectionPipeline {
             let _ = self.sam2_processor.lock().unwrap().set_image(&image_rust.mat);
         }
 
-        let mut new_etiquettes: Vec<Detection> = Vec::new();
         let mut assignments: Vec<(usize, f32)> = Vec::new();
         for detection in vec_detections.iter_mut() {
             match detection.categorie {
@@ -283,7 +281,7 @@ impl PyDetectionPipeline {
             cand_margin: self.config.cand_margin
         };
         match self.identifier.lock().unwrap().route(&detection.mask.mat, &gate, self.number_photos_candidates_for_vlm)? {
-            Route::Accept { ean, name, sim, margin } => {
+            Route::Accept { ean, name, sim, _ } => {
                 detection.label = ean.clone();
                 detection.score = sim;
             },
