@@ -11,7 +11,7 @@ use std::io::BufReader;
 
 //--------------------------------------------------------------------------------------------------
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
 
