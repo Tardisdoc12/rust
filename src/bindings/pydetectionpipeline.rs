@@ -285,23 +285,23 @@ impl PyDetectionPipeline {
         match self.identifier.route(&detection.mask.mat, &gate, self.number_photos_candidates_for_vlm)? {
             Route::Accept { ean, name, sim, margin } => {
                 detection.label = ean.clone();
-                detection.conf = sim;
+                detection.score = sim;
             },
             Route::Reject { sim } => {
                 detection.label = "OOB".to_string();
-                detection.conf = 1 - sim;
+                detection.score = 1.0 - sim;
             },
             Route::Ask { cands, sim, margin } => {
                 let r = self.vlm.process_product(&detection.mask.mat, &cands)?;
                 match &r.ean {
                     Some(ean) => {
                         detection.label = ean.clone();
-                        detection.conf = r.conf;
+                        detection.score = r.conf;
                         println!("VLM : {ean} (conf {:.2}, ordres d'accord {}) [sim {sim:.3}, écart {margin:.3}]", r.conf, r.agree);
                     },
                     None => {
                         detection.label = "OOB".to_string();
-                        detection.conf = 1.0 - r.conf;
+                        detection.score = 1.0 - r.conf;
                         println!("VLM : aucun des candidats (OOB {:.2})", r.conf);
                     },
                 }
