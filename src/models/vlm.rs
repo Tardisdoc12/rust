@@ -91,7 +91,7 @@ fn probs_from_logits(logits: &[f32], ids: &HashMap<char, Vec<u32>>, letters: &[c
 // ------------------------------------------------------------------ la classe
 
 pub struct Vlm {
-    backend: Box<dyn VlmBackend>,
+    backend: Box<dyn VlmBackend + Send>,
     pub perms: usize,
     pub early_conf: Option<f32>,
     pub max_side: i32,
@@ -100,7 +100,7 @@ pub struct Vlm {
 }
 
 impl Vlm {
-    pub fn new(backend: Box<dyn VlmBackend>) -> Self {
+    pub fn new(backend: Box<dyn VlmBackend + Send>) -> Self {
         Self { backend, perms: 2, early_conf: None, max_side: 672, no_names: false, seed: 0 }
     }
 
