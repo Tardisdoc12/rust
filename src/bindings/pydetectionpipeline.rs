@@ -275,7 +275,7 @@ impl PyDetectionPipeline {
             .predict_box(bbox)
     }
 
-    fn classify_produit(&self, detection: &mut Detection, h: Option<&Mat>, has_ref: bool) {
+    fn classify_produit(&self, detection: &mut Detection, h: Option<&Mat>, has_ref: bool) ->  Result<(), Box<dyn std::error::Error>> {
         let gate = Gate { 
             accept_sim: self.config.accept_sim,
             accept_margin: self.config.accept_margin,
@@ -326,7 +326,7 @@ impl PyDetectionPipeline {
 
     fn classify_etiquette(&self, detection: &mut Detection) {
         let Ok(result) = process_locked(&self.florence, &detection.mask.mat) else { return };
-        let best_price_f32 = result.price;
+        let best_price_f32 = result.price as f32;
         if best_price_f32.is_none() {
             detection.price = 0.0 as f32;
             return;
@@ -340,7 +340,7 @@ impl PyDetectionPipeline {
         detection: &Detection,
     ) -> anyhow::Result<Option<Detection>> {
         let Ok(result) = process_locked(&self.florence, &detection.mask.mat) else { return };
-        let best_price_f32 = result.price;
+        let best_price_f32 = result.price as f32;
         if best_price_f32.is_none() {
             detection.price = 0.0 as f32;
             return;
