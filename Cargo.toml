@@ -21,3 +21,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rand = "0.10.3"
 serde = { version = "1.0.229", features = ["derive"] }
 tokenizers = "0.23.2"
+half = "2.7.1"
