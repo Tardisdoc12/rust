@@ -20,6 +20,7 @@ use crate::models::{
     yolo_26::YOLO26,
     qwen_onnx::QwenOnnx,
     identifier::{Gate, Identifier, Route},
+    florence::Florence,
 };
 use crate::detections::{mask::Mask, detection_class::DetectionClass, detections::Detection};
 
@@ -86,6 +87,7 @@ pub struct PyDetectionPipeline {
     number_photos_candidates_for_vlm: usize,
     vlm: Mutex<Vlm>,
     sam2_processor: Mutex<Sam2Processor>,
+    florence: Mutex<Florence>,
     resolver: LabelResolver,
 }
 
@@ -116,6 +118,7 @@ impl PyDetectionPipeline {
                 sam2.setup_model(config.sam2_path_encoder, config.sam2_path_decoder, config.device)?;
                 Ok(sam2)
             });
+            let h_florence = scope.spawn(|| Processor::new(Florence::new(), config.florence_path, config.device));
 
             let h_embbed = scope.spawn(|| -> anyhow::Result<Identifier> {
                 let mut ident = Identifier::new(config.identifier_base_path, config.number_candidates)?;          // dossier avec meta.json + embeddings.npy
@@ -139,6 +142,7 @@ impl PyDetectionPipeline {
                 h_sam2.join().map_err(|_| anyhow::anyhow!("thread sam2 a paniqué"))??,
                 h_backend.join().map_err(|_| anyhow::anyhow!("thread backend a paniqué"))??,
                 h_embbed.join().map_err(|_| anyhow::anyhow!("thread embedder a paniqué"))??,
+                h_florence.join().map_err(|_| anyhow::anyhow!("thread florence a paniqué"))??,
             ))
         });
 
@@ -146,7 +150,8 @@ impl PyDetectionPipeline {
             processor_yolo,
             sam2_processor,
             backend,
-            identifier
+            identifier,
+            florence
         ) = result.map_err(to_py_err)?;
 
         Ok(Self {
@@ -154,6 +159,7 @@ impl PyDetectionPipeline {
             sam2_processor: Mutex::new(sam2_processor),
             vlm: Mutex::new(backend),
             identifier: Mutex::new(identifier),
+            florence: Mutex::new(florence),
             config,
             config.number_photos_candidates_for_vlm,
             resolver,
@@ -164,6 +170,7 @@ impl PyDetectionPipeline {
         let _ = self.processor_yolo.lock().map(|mut p| p.unload());
         let _ = self.sam2_processor.lock().map(|mut p| p.unload());
         let _ = self.identifier.lock().map(|mut i| i.unload());
+        let _ = self.florence.lock().map(|mut f| f.unload());
     }
 
     /// Traite une image. Les modèles déjà chargés sont réutilisés — appelez
