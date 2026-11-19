@@ -8,8 +8,7 @@ use std::thread;
 use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
 use numpy::PyReadonlyArray3;
-use opencv::core::{Mat, Rect};
-use opencv::prelude::MatTraitConst;
+use opencv::core::Mat;
 use tracing_subscriber::EnvFilter;
 
 use crate::processor::processor::Processor;
@@ -31,14 +30,6 @@ use crate::tools_class::label_resolver::LabelResolver;
 use crate::functions_::utils::compute_homography_from_reference;
 
 //--------------------------------------------------------------------------------------------------
-
-#[derive(Debug, Clone)]
-pub struct BoundingBox {
-    pub x1: f32,
-    pub y1: f32,
-    pub x2: f32,
-    pub y2: f32,
-}
 
 fn to_py_err(e: anyhow::Error) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
@@ -213,17 +204,17 @@ impl PyDetectionPipeline {
         for detection in vec_detections.iter_mut() {
             match detection.categorie {
                 DetectionClass::Produit => {
-                    self.classify_produit(detection, homography.as_ref(), has_ref);
+                    let _ = self.classify_produit(detection, homography.as_ref(), has_ref);
                     self.resolver.resolve(detection);
                 }
                 DetectionClass::Etiquette => {
-                    self.classify_etiquette(detection);
+                    let _ = self.classify_etiquette(detection);
                     if let Some(idx) = nearest_object(&objects, detection.bbox.center_rel()) {
                         assignments.push((idx, detection.price));
                     }
                 }
                 DetectionClass::Publicity => {
-                    self.classify_publicity(detection);
+                    let _ = self.classify_publicity(detection);
                     if detection.price > 0.0 {
                         number_etiquette += 1;
                         if let Some(idx) = nearest_object(&objects, detection.bbox.center_rel()) {
