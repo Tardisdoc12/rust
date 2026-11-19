@@ -17,7 +17,6 @@ use crate::models::model_core::ModelPipeline;
 use crate::models::{
     tiled_yolo_26::{TiledYOLO26, TiledConfig},
     sam2::Sam2Processor,
-    yolo_26::YOLO26,
     qwen_onnx::QwenOnnx,
     identifier::{Gate, Identifier, Route},
     florence::Florence,
@@ -26,7 +25,7 @@ use crate::detections::{mask::Mask, detection_class::DetectionClass, detections:
 
 use crate::functions_::positionnement::set_all_position;
 use crate::functions_::tiled_merge::MergeConfig;
-use crate::functions_::config::{lire_config, Config};
+use crate::tools_class::config::{lire_config, Config};
 use crate::tools_class::label_resolver::LabelResolver;
 
 //--------------------------------------------------------------------------------------------------
