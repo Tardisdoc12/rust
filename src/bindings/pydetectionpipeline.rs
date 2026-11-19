@@ -280,7 +280,7 @@ impl PyDetectionPipeline {
             cand_margin: self.config.cand_margin
         };
         match self.identifier.lock().unwrap().route(&detection.mask.mat, &gate, self.number_photos_candidates_for_vlm)? {
-            Route::Accept { ean, .., sim, .. } => {
+            Route::Accept { ean, name: _, sim, .. } => {
                 detection.label = ean.clone();
                 detection.score = sim;
             },
