@@ -11,13 +11,12 @@ use tokenizers::Tokenizer;
 use crate::models::model_core::ModelPipeline;
 use crate::functions_::setup_model_avec_cache::setup_model_avec_cache;
 
-//--------------------------------------------------------------------------------------------------
-
 #[derive(Deserialize, Clone)]
 struct Gen {
     img_size: usize, square: bool, mean: [f32; 3], std: [f32; 3],
     decoder_start_token_id: i64, eos_token_id: i64, pad_token_id: i64,
-    forced_bos_token_id: Option<i64>, max_new_tokens: usize,
+    forced_bos_token_id: Option<i64>, #[serde(default)] forced_eos_token_id: Option<i64>,
+    max_new_tokens: usize, #[serde(default)] no_repeat_ngram_size: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,8 +41,6 @@ fn pad_square(rgb: &Mat) -> anyhow::Result<Mat> {
     rgb.copy_to(&mut roi)?;
     Ok(canvas)
 }
-
-//--------------------------------------------------------------------------------------------------
 
 impl ModelPipeline for Florence {
     type Output = PriceRead;
@@ -93,20 +90,35 @@ impl ModelPipeline for Florence {
         let ehs = data.to_vec();
         drop(out);
 
+        // Même règles que HF generate + Runner.read (vérifiées en Python, cf. export_florence_onnx.ort_read) :
+        //  - jeton forcé en 1re position, compté dans la confiance avec log-proba 0 et dans max_new_tokens ;
+        //  - no_repeat_ngram_size : jetons qui répéteraient un n-gramme interdits AVANT la normalisation ;
+        //  - EOS forcé (log-proba 0) au dernier pas autorisé.
         let mut seq: Vec<i64> = vec![g.decoder_start_token_id];
-        if let Some(b) = g.forced_bos_token_id { seq.push(b); }
-        let mut raw = Vec::new();
+        let mut raw: Vec<f32> = Vec::new();
+        let mut steps = g.max_new_tokens;
+        if let Some(b) = g.forced_bos_token_id { seq.push(b); raw.push(b as f32); raw.push(0.0); steps -= 1; }
         let dec = self.dec.as_mut().ok_or_else(|| anyhow::anyhow!("modèle non chargé"))?;
-        for _ in 0..g.max_new_tokens {
-            let o = dec.run(ort::inputs![
-                "decoder_input_ids" => Tensor::from_array(([1usize, seq.len()], seq.clone().into_boxed_slice()))?,
-                "encoder_hidden_states" => Tensor::from_array(([1usize, l, h], ehs.clone().into_boxed_slice()))?,
-            ])?;
-            let (_, lg) = o["logits"].try_extract_tensor::<f32>()?;     // [1, V]
-            let (mut best, mut bv) = (0usize, f32::NEG_INFINITY);
-            for (i, &v) in lg.iter().enumerate() { if v > bv { bv = v; best = i; } }
-            let lse = bv as f64 + lg.iter().map(|&v| ((v - bv) as f64).exp()).sum::<f64>().ln();
-            raw.push(best as f32); raw.push((bv as f64 - lse) as f32);
+        for step in 0..steps {
+            let (best, lp) = if g.forced_eos_token_id.is_some() && step == steps - 1 {
+                (g.forced_eos_token_id.unwrap() as usize, 0.0f64)
+            } else {
+                let o = dec.run(ort::inputs![
+                    "decoder_input_ids" => Tensor::from_array(([1usize, seq.len()], seq.clone().into_boxed_slice()))?,
+                    "encoder_hidden_states" => Tensor::from_array(([1usize, l, h], ehs.clone().into_boxed_slice()))?,
+                ])?;
+                let (_, lg) = o["logits"].try_extract_tensor::<f32>()?;     // [1, V]
+                let banned = banned_ngram(&seq, g.no_repeat_ngram_size.unwrap_or(0));
+                let (mut best, mut bv) = (0usize, f32::NEG_INFINITY);
+                for (i, &v) in lg.iter().enumerate() {
+                    if banned.contains(&(i as i64)) { continue; }
+                    if v > bv { bv = v; best = i; }
+                }
+                let lse = bv as f64 + lg.iter().enumerate().filter(|(i, _)| !banned.contains(&(*i as i64)))
+                    .map(|(_, &v)| ((v - bv) as f64).exp()).sum::<f64>().ln();
+                (best, bv as f64 - lse)
+            };
+            raw.push(best as f32); raw.push(lp as f32);
             seq.push(best as i64);
             if best as i64 == g.eos_token_id { break; }
         }
@@ -125,7 +137,12 @@ impl ModelPipeline for Florence {
     fn unload(&mut self) { self.enc = None; self.dec = None; self.tok = None; self.g = None; }
 }
 
-//--------------------------------------------------------------------------------------------------
+/// Jetons interdits par no_repeat_ngram_size = n (règle de NoRepeatNGramLogitsProcessor).
+fn banned_ngram(seq: &[i64], n: usize) -> Vec<i64> {
+    if n == 0 || seq.len() < n { return Vec::new(); }
+    let prefix = &seq[seq.len() - (n - 1)..];
+    (0..=seq.len() - n).filter(|&i| &seq[i..i + n - 1] == prefix).map(|i| seq[i + n - 1]).collect()
+}
 
 /// sortie du modèle ("2899.00" / "-") -> prix. Même règle que from_target Python pour le cas normal (repli simplifié).
 fn to_price(text: &str) -> Option<f64> {
@@ -133,8 +150,6 @@ fn to_price(text: &str) -> Option<f64> {
     if matches!(s.to_lowercase().as_str(), "-" | "" | "aucun" | "none") || !s.chars().any(|c| c.is_ascii_digit()) { return None; }
     s.replace(',', ".").parse::<f64>().ok().filter(|v| *v > 0.0)
 }
-
-//--------------------------------------------------------------------------------------------------
 
 impl Florence {
     /// image -> lecture complète (les trois étapes).
