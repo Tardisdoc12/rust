@@ -142,7 +142,7 @@ impl PyDetectionPipeline {
                     &config.device)?;
                 let mut vlm = Vlm::new(Box::new(backend));
                 vlm.perms = config.perms;
-                vlm.early_conf = config.early_conf;
+                vlm.early_conf = Some(config.early_conf);
                 Ok(vlm)
             });
 
