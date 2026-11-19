@@ -31,7 +31,6 @@ use crate::functions_::setup_model_avec_cache::setup_model_avec_cache;
 use crate::models::model_core::ModelPipeline;
 use crate::functions_::tiled_geometry::{build_plan, rows_to_cands, scaled_size, TilePlan};
 use crate::functions_::tiled_merge::MergeConfig;
-use crate::models::yolo_26::crop_mat; // -> passer `fn crop_mat` en `pub(crate) fn crop_mat` dans yolo_26.rs
 
 //--------------------------------------------------------------------------------------------------
 
@@ -63,6 +62,21 @@ impl Default for TiledConfig {
             merge: MergeConfig::default(),
         }
     }
+}
+
+pub fn crop_mat(image: &Mat, bbox: (i32, i32, i32, i32)) -> anyhow::Result<Mat> {
+    let (x1, y1, x2, y2) = bbox;
+    let largeur = image.cols();
+    let hauteur = image.rows();
+
+    let x1 = x1.max(0);
+    let y1 = y1.max(0);
+    let x2 = x2.min(largeur);
+    let y2 = y2.min(hauteur);
+
+    let rect = Rect::new(x1, y1, (x2 - x1).max(1), (y2 - y1).max(1));
+    let roi = Mat::roi(image, rect)?;
+    Ok(roi.try_clone()?)
 }
 
 pub struct TiledYOLO26 {
