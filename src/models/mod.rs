@@ -1,5 +1,4 @@
 pub mod model_core;
-pub mod yolo_26;
 pub mod sam2;
 pub mod tiled_yolo_26;
 pub mod vlm;
