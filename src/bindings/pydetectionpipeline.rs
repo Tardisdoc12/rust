@@ -106,7 +106,7 @@ impl PyDetectionPipeline {
     fn new(
         config_path: &str
     ) -> PyResult<Self> {
-        let config = lire_config(config_path).map_err(to_py_err)?;
+        let config = lire_config(config_path).map_err(|arg0: std::boxed::Box<dyn StdError>| to_py_err(/* anyhow::Error */))?;
 
         let resolver = LabelResolver::load().map_err(to_py_err)?;
         // Chargement des modèles EN PARALLÈLE (fichiers et sessions ONNX
