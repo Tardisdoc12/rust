@@ -331,7 +331,7 @@ impl PyDetectionPipeline {
     /// Renvoie l'étiquette (prix) trouvée dans la publicité, si elle existe.
     fn classify_publicity(
         &self,
-        detection: &Detection,
+        detection: &mut Detection,
     ) -> anyhow::Result<()> {
         let Ok(result) = process_locked(&self.florence, &detection.mask.mat) else { return Ok(()); };
         
