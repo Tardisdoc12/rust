@@ -338,7 +338,6 @@ impl PyDetectionPipeline {
     fn classify_publicity(
         &self,
         detection: &Detection,
-        img_shape: (usize, usize),
     ) -> anyhow::Result<Option<Detection>> {
         let Ok(result) = process_locked(&self.florence, &detection.mask.mat) else { return };
         let best_price_f32 = result.price;
