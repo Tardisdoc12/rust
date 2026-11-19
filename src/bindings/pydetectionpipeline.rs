@@ -18,6 +18,7 @@ use crate::models::{
     tiled_yolo_26::{TiledYOLO26, TiledConfig},
     sam2::Sam2Processor,
     qwen_onnx::QwenOnnx,
+    vlm::Vlm,
     identifier::{Gate, Identifier, Route},
     florence::Florence,
 };
@@ -29,6 +30,14 @@ use crate::tools_class::config::{lire_config, Config};
 use crate::tools_class::label_resolver::LabelResolver;
 
 //--------------------------------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct BoundingBox {
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
+}
 
 fn to_py_err(e: anyhow::Error) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
