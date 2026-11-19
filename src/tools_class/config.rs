@@ -16,7 +16,7 @@ use std::io::BufReader;
 struct Config {
 
     #[serde(default = "device_par_defaut")]
-    device: &str,
+    device: String,
 
     // Seuil de similarité pour accepter ou non une correspondance
     accept_sim: f32,
@@ -37,23 +37,23 @@ struct Config {
     // paths_of_all_models:
 
     // Chemin vers le modèle YOLO 26
-    yolo_26_path: &str,
+    yolo_26_path: String,
 
     // Chemin vers le modèle Florence
-    florence_path: &str,
+    florence_path: String,
     
     // Les différents fichiers de modèles pour SAM2
-    sam2_path_encoder: &str,
-    sam2_path_decoder: &str,
+    sam2_path_encoder: String,
+    sam2_path_decoder: String,
     
     // Embedder => C'est le modèle pour extraire les embeddings des objets détectés
-    embedder_path: &str,
+    embedder_path: String,
     
     // Chemin vers le dossier contenant la base d'identifiants pour l'embedder
-    identifier_base_path: &str,
+    identifier_base_path: String,
     
     // QwenOnnx => Modèle pour le traitement des produits difficiles à associer
-    visual_path: &str, embed_path: &str, decoder_path: &str, tokenizer_json: &str,
+    visual_path: String, embed_path: String, decoder_path: String, tokenizer_json: String,
     #[serde(default = "kv_heads_par_defaut")]
     kv_heads: usize,
     #[serde(default = "head_dim_par_defaut")] 
@@ -68,7 +68,7 @@ struct Config {
 
 //--------------------------------------------------------------------------------------------------
 
-pub fn lire_config(chemin: &str) -> Result<Config, Box<dyn Error>> {
+pub fn lire_config(chemin: &String) -> Result<Config, Box<dyn Error>> {
     // 1. Ouvrir le fichier
     let fichier = File::open(chemin)?;
     // 2. Créer un lecteur tampon (buffer) pour optimiser la lecture
@@ -83,8 +83,8 @@ pub fn lire_config(chemin: &str) -> Result<Config, Box<dyn Error>> {
 
 // Valeurs par défaut pour les différents paramètres de configuration
 
-fn device_par_defaut() -> &'static str {
-    "cuda"
+fn device_par_defaut() -> String {
+    "cuda".to_string()
 }
 
 fn kv_heads_par_defaut() -> usize {
