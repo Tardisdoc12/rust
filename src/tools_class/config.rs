@@ -68,7 +68,7 @@ pub struct Config {
 
 //--------------------------------------------------------------------------------------------------
 
-pub fn lire_config(chemin: &String) -> Result<Config, Box<dyn Error>> {
+pub fn lire_config(chemin: &str) -> Result<Config, Box<dyn Error>> {
     // 1. Ouvrir le fichier
     let fichier = File::open(chemin)?;
     // 2. Créer un lecteur tampon (buffer) pour optimiser la lecture
