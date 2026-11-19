@@ -44,6 +44,10 @@ pub struct Identifier {
 }
 
 impl Identifier {
+    pub fn new(db_path: &str, k: usize) -> anyhow::Result<Self> {
+        Ok(Self { embedder: Embedder::new(), db: Db::load(db_path)?, k })
+    }
+    
     /// Candidats prêts pour le VLM pour les codes `cs` : nom + `n_refs` photos de référence chargées.
     fn load_cands(&self, sims: &[f32], cs: &[usize], n_refs: usize) -> anyhow::Result<Vec<VlmCandidate>> {
         let mut out = Vec::new();
