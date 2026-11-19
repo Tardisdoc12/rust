@@ -16,54 +16,54 @@ use std::io::BufReader;
 struct Config {
 
     #[serde(default = "device_par_defaut")]
-    device: String,
+    pub device: String,
 
     // Seuil de similarité pour accepter ou non une correspondance
-    accept_sim: f32,
-    accept_margin: f32,
-    reject_sim: f32,
+    pub accept_sim: f32,
+    pub accept_margin: f32,
+    pub reject_sim: f32,
 
     // Marge pour les candidats
-    cand_margin: Option<f32>,
+    pub cand_margin: Option<f32>,
     
     // Les nombres par défaut pour les photos et les candidats pour le VLM
     // => impacte le temps de traitement direct du VLM
 
     #[serde(default = "nbr_photo_par_defaut")]
-    number_photos_candidates_for_vlm: usize,
+    pub number_photos_candidates_for_vlm: usize,
     #[serde(default = "nbr_cdt_par_defaut")]
-    number_candidate: usize,
+    pub number_candidate: usize,
 
     // paths_of_all_models:
 
     // Chemin vers le modèle YOLO 26
-    yolo_26_path: String,
+    pub yolo_26_path: String,
 
     // Chemin vers le modèle Florence
-    florence_path: String,
+    pub florence_path: String,
     
     // Les différents fichiers de modèles pour SAM2
-    sam2_path_encoder: String,
-    sam2_path_decoder: String,
+    pub sam2_path_encoder: String,
+    pub sam2_path_decoder: String,
     
     // Embedder => C'est le modèle pour extraire les embeddings des objets détectés
-    embedder_path: String,
+    pub embedder_path: String,
     
     // Chemin vers le dossier contenant la base d'identifiants pour l'embedder
-    identifier_base_path: String,
+    pub identifier_base_path: String,
     
     // QwenOnnx => Modèle pour le traitement des produits difficiles à associer
-    visual_path: String, embed_path: String, decoder_path: String, tokenizer_json: String,
+    pub visual_path: String, pub embed_path: String, pub decoder_path: String, pub tokenizer_json: String,
     #[serde(default = "kv_heads_par_defaut")]
-    kv_heads: usize,
+    pub kv_heads: usize,
     #[serde(default = "head_dim_par_defaut")] 
-    head_dim: usize,
+    pub head_dim: usize,
     #[serde(default = "tokens_per_second_par_defaut")]
-    tokens_per_second: i64,
+    pub tokens_per_second: i64,
 
     // perms et early_conf pour le VLM
-    perms: Option<usize>,
-    early_conf: Option<f32>,
+    pub perms: Option<usize>,
+    pub early_conf: Option<f32>,
 }
 
 //--------------------------------------------------------------------------------------------------
