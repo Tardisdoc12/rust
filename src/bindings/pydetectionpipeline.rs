@@ -327,8 +327,7 @@ impl PyDetectionPipeline {
 
     fn classify_etiquette(&self, detection: &mut Detection) -> anyhow::Result<()> {
         let Ok(result) = process_locked(&self.florence, &detection.mask.mat) else { return Ok(()); };
-        let best_price_f32 = result.price as f32;
-        detection.price = best_price_f32;
+        detection.price = result.price.map(|p| p as f32).unwrap_or(0.0);
         Ok(())
     }
 
@@ -339,7 +338,7 @@ impl PyDetectionPipeline {
     ) -> anyhow::Result<()> {
         let Ok(result) = process_locked(&self.florence, &detection.mask.mat) else { return Ok(()); };
         
-        detection.price = result.price as f32;
+        detection.price = result.price.map(|p| p as f32).unwrap_or(0.0);
         Ok(())
     }
 
