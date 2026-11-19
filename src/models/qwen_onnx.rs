@@ -127,7 +127,7 @@ impl QwenOnnx {
         let decoder = setup_model_avec_cache(&decoder_path, device)?;
         // [ORT] entrées du décodeur dont le nom commence par "past_key_values" + leur type (fp16 ou fp32)
         let past = decoder.inputs().iter().filter(|i| i.name().starts_with("past_key_values"))
-            .map(|i| Past { name: i.name().clone(), f16: format!("{:?}", i.input_type).contains("Float16") }).collect::<Vec<_>>();
+            .map(|i| Past { name: i.name().to_string(), f16: format!("{:?}", i.input_type).contains("Float16") }).collect::<Vec<_>>();
         anyhow::ensure!(!past.is_empty(), "aucune entrée past_key_values : ce n'est pas le décodeur 'merged' attendu");
         Ok(Self { visual, embed, decoder, tok, letter_ids, pad_id, past, kv_heads, head_dim,
                   time_scale: tokens_per_second, min_pixels: 56 * 56, max_pixels: 28 * 28 * 768 })
