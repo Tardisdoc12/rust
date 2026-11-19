@@ -172,7 +172,7 @@ impl PyDetectionPipeline {
             config,
             number_photos_candidates_for_vlm: config.number_photos_candidates_for_vlm,
             resolver,
-        });
+        })
     }
 
     fn unload(&self) {
