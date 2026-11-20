@@ -1,7 +1,3 @@
-//--------------------------------------------------------------------------------------------------
-// Filename: sam2.rs
-//--------------------------------------------------------------------------------------------------
-
 use ort::session::Session;
 use ort::value::Value;
 use opencv::core::Mat;
@@ -14,6 +10,7 @@ use crate::functions_::setup_model_avec_cache::setup_model_avec_cache;
 //--------------------------------------------------------------------------------------------------
 
 const ENCODER_SIZE: i32 = 1024; // input_height/input_width du modèle
+const BATCH: usize = 16; // boîtes par appel du décodeur (num_labels) : 16 = bon compromis vitesse / mémoire GPU
 const MASK_SCALE_FACTOR: i32 = 4; // encoder_input_size / scale_factor = résolution native du masque
 
 const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
@@ -117,104 +114,110 @@ impl Sam2Processor {
         Ok(())
     }
 
-    /// Prédit un masque pour une bbox (coordonnées dans l'espace de l'image ORIGINALE, en pixels).
-    /// Convention SAM : une box = 2 points, labels 2 (top-left) et 3 (bottom-right).
+    /// Une seule boîte (garde la signature d'avant) : passe par le chemin groupé.
     pub fn predict_box(&mut self, bbox: (f32, f32, f32, f32)) -> anyhow::Result<Mask> {
-        let (x1, y1, x2, y2) = bbox;
+        self.predict_boxes(&[bbox])?.into_iter().next().ok_or_else(|| anyhow::anyhow!("aucun masque renvoyé"))
+    }
 
-        // normalisation des points : ratio x et y SÉPARÉS (pas un scale unique, cohérent
-        // avec le resize non-aspect-preserving de l'encoder)
-        let norm_x = |x: f32| x / self.orig_width as f32 * ENCODER_SIZE as f32;
-        let norm_y = |y: f32| y / self.orig_height as f32 * ENCODER_SIZE as f32;
+    /// Plusieurs boîtes (mêmes coordonnées et convention que predict_box), décodées par lots de BATCH :
+    /// l'encodeur d'image n'est pas relancé, le décodeur tourne une fois par lot au lieu d'une fois par boîte.
+    /// REQUIERT un décodeur ONNX dont la 1re dimension de point_coords / point_labels / mask_input est dynamique (num_labels).
+    pub fn predict_boxes(&mut self, boxes: &[(f32, f32, f32, f32)]) -> anyhow::Result<Vec<Mask>> {
+        let mut out = Vec::with_capacity(boxes.len());
+        for chunk in boxes.chunks(BATCH) {
+            out.extend(self.predict_chunk(chunk)?);
+        }
+        Ok(out)
+    }
 
-        let point_coords = vec![
-            norm_x(x1), norm_y(y1), // top-left
-            norm_x(x2), norm_y(y2), // bottom-right
-        ];
-        let point_labels = vec![2.0f32, 3.0f32];
+    fn predict_chunk(&mut self, boxes: &[(f32, f32, f32, f32)]) -> anyhow::Result<Vec<Mask>> {
+        let n = boxes.len();
+        let (ow, oh) = (self.orig_width, self.orig_height);
+        let enc = ENCODER_SIZE as f32;
 
-        // mask_input : (num_labels=1, 1, 256, 256) zéros
+        // une boîte = 2 points (labels 2 = haut-gauche, 3 = bas-droite), ratios x et y SÉPARÉS
+        let mut point_coords = Vec::with_capacity(4 * n);
+        let mut point_labels = Vec::with_capacity(2 * n);
+        for &(x1, y1, x2, y2) in boxes {
+            point_coords.extend([x1 / ow as f32 * enc, y1 / oh as f32 * enc, x2 / ow as f32 * enc, y2 / oh as f32 * enc]);
+            point_labels.extend([2.0f32, 3.0f32]);
+        }
         let mask_res = ENCODER_SIZE / MASK_SCALE_FACTOR; // 256
-        let mask_input = vec![0f32; (1 * 1 * mask_res * mask_res) as usize];
-        // has_mask_input : forme fixe (1,), PAS (num_labels,)
-        let has_mask_input = vec![0f32; 1];
+        let mask_input = vec![0f32; n * (mask_res * mask_res) as usize];   // (num_labels, 1, 256, 256) zéros
+        let has_mask_input = vec![0f32; 1];                                  // forme fixe (1,)
 
-        let embed = self.image_embed.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("set_image doit être appelé avant predict_box"))?;
+        let embed = self.image_embed.as_ref().ok_or_else(|| anyhow::anyhow!("set_image doit être appelé avant predict_box(es)"))?;
         let feat0 = self.high_res_feat0.as_ref().unwrap();
         let feat1 = self.high_res_feat1.as_ref().unwrap();
-
-        let decoder = self.decoder.as_mut()
-            .ok_or_else(|| anyhow::anyhow!("Decoder non chargé"))?;
-
-        let embed_val = Value::from_array(([1, 256, 64, 64], embed.clone()))?;
-        let feat0_val = Value::from_array(([1, 32, 256, 256], feat0.clone()))?;
-        let feat1_val = Value::from_array(([1, 64, 128, 128], feat1.clone()))?;
-        let points_val = Value::from_array(([1, 2, 2], point_coords))?;
-        let labels_val = Value::from_array(([1, 2], point_labels))?;
-        let mask_input_val = Value::from_array(([1, 1, mask_res, mask_res], mask_input))?;
-        let has_mask_val = Value::from_array(([1], has_mask_input))?;
+        let decoder = self.decoder.as_mut().ok_or_else(|| anyhow::anyhow!("Decoder non chargé"))?;
 
         let outputs = decoder.run(ort::inputs![
-            "image_embed" => embed_val,
-            "high_res_feats_0" => feat0_val,
-            "high_res_feats_1" => feat1_val,
-            "point_coords" => points_val,
-            "point_labels" => labels_val,
-            "mask_input" => mask_input_val,
-            "has_mask_input" => has_mask_val,
+            "image_embed" => Value::from_array(([1, 256, 64, 64], embed.clone()))?,
+            "high_res_feats_0" => Value::from_array(([1, 32, 256, 256], feat0.clone()))?,
+            "high_res_feats_1" => Value::from_array(([1, 64, 128, 128], feat1.clone()))?,
+            "point_coords" => Value::from_array(([n as i64, 2, 2], point_coords))?,
+            "point_labels" => Value::from_array(([n as i64, 2], point_labels))?,
+            "mask_input" => Value::from_array(([n as i64, 1, mask_res as i64, mask_res as i64], mask_input))?,
+            "has_mask_input" => Value::from_array(([1], has_mask_input))?,
         ])?;
 
-        // masks: (num_labels=1, num_masks, H, W) — on prend le batch 0
-        let masks_tensor = outputs["masks"].try_extract_tensor::<f32>()?;
-        let masks_shape: Vec<i64> = masks_tensor.0.to_vec();
-        let masks_data = masks_tensor.1;
+        // masks : (n, num_masks, H, W) ; iou_predictions : (n, num_masks)
+        let (mshape, mdata) = outputs["masks"].try_extract_tensor::<f32>()?;
+        let mshape: Vec<i64> = mshape.to_vec();
+        anyhow::ensure!(mshape.len() == 4 && mshape[0] as usize == n,
+            "le décodeur n'a pas renvoyé {n} jeux de masques (forme {:?}) : son axe num_labels est probablement fixe à 1", mshape);
+        let (nm, mh, mw) = (mshape[1] as usize, mshape[2] as usize, mshape[3] as usize);
+        let (_, iou) = outputs["iou_predictions"].try_extract_tensor::<f32>()?;
 
-        let mask_h = masks_shape[2] as usize;
-        let mask_w = masks_shape[3] as usize;
+        let mut result = Vec::with_capacity(n);
+        for i in 0..n {
+            // meilleur masque parmi num_masks, comme masks[np.argmax(scores)]
+            let best = (0..nm).max_by(|&a, &b| iou[i * nm + a].partial_cmp(&iou[i * nm + b]).unwrap()).unwrap_or(0);
+            let start = (i * nm + best) * mh * mw;
+            result.push(self.mask_to_full(&mdata[start..start + mh * mw], mh, mw)?);
+        }
+        Ok(result)
+    }
 
-        let iou_tensor = outputs["iou_predictions"].try_extract_tensor::<f32>()?;
-        let scores: Vec<f32> = iou_tensor.1.to_vec();
+    /// Masque natif (logits mh x mw) -> masque binaire à la taille de l'image originale.
+    /// Même résultat que « resize bilinéaire de toute l'image puis seuil > 0 », mais le calcul ne se fait que dans la zone
+    /// où un pixel peut être positif : l'interpolation bilinéaire est une moyenne pondérée, donc hors du rectangle englobant
+    /// des logits > 0 (élargi d'un pixel natif) le résultat est <= 0. (Écart mesuré en Python : 1 à 3 pixels sur 12-24 millions,
+    /// dû à l'arithmétique à virgule fixe de warpAffine.)
+    fn mask_to_full(&self, low: &[f32], mh: usize, mw: usize) -> anyhow::Result<Mask> {
+        use opencv::core::{Rect, Scalar, Size, BORDER_REPLICATE, CV_8UC1};
+        let (ow, oh) = (self.orig_width, self.orig_height);
+        let mut full = Mat::zeros(oh, ow, CV_8UC1)?.to_mat()?;
 
-        // sélection du meilleur masque, comme masks[np.argmax(scores)]
-        let best_idx = scores.iter()
-            .enumerate()
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-            .map(|(i, _)| i)
-            .unwrap_or(0);
+        // rectangle englobant des logits > 0
+        let (mut xmin, mut xmax, mut ymin, mut ymax) = (usize::MAX, 0usize, usize::MAX, 0usize);
+        for y in 0..mh { for x in 0..mw {
+            if low[y * mw + x] > 0.0 { xmin = xmin.min(x); xmax = xmax.max(x); ymin = ymin.min(y); ymax = ymax.max(y); }
+        }}
+        if xmin == usize::MAX {
+            return Ok(Mask { mat: Mat::default(), _mat_bin: full });      // aucun pixel positif : masque vide
+        }
+        let (sx, sy) = (mw as f64 / ow as f64, mh as f64 / oh as f64);   // pas dans l'espace natif par pixel de sortie
+        let lo = |i: usize, s: f64, dim: i32| (((i as f64 - 1.0 + 0.5) / s - 0.5).floor() as i32).clamp(0, dim - 1);
+        let hi = |i: usize, s: f64, dim: i32| (((i as f64 + 1.0 + 0.5) / s - 0.5).ceil() as i32).clamp(0, dim - 1);
+        let (x0, x1) = (lo(xmin, sx, ow), hi(xmax, sx, ow));
+        let (y0, y1) = (lo(ymin, sy, oh), hi(ymax, sy, oh));
+        let (rw, rh) = (x1 - x0 + 1, y1 - y0 + 1);
 
-        let mask_start = best_idx * mask_h * mask_w;
-        let best_mask_raw = &masks_data[mask_start..mask_start + mask_h * mask_w];
+        let low_mat = Mat::new_rows_cols_with_data(mh as i32, mw as i32, low)?.try_clone()?;
+        // transformation destination(zone) -> source(natif), centres de pixels comme cv::resize
+        let m = Mat::from_slice_2d(&[[sx, 0.0, sx * (x0 as f64 + 0.5) - 0.5], [0.0, sy, sy * (y0 as f64 + 0.5) - 0.5]])?;
+        let mut roi_f = Mat::default();
+        imgproc::warp_affine(&low_mat, &mut roi_f, &m, Size::new(rw, rh),
+            imgproc::INTER_LINEAR | imgproc::WARP_INVERSE_MAP, BORDER_REPLICATE, Scalar::default())?;
+        let mut roi_bin_f = Mat::default();
+        imgproc::threshold(&roi_f, &mut roi_bin_f, 0.0, 255.0, imgproc::THRESH_BINARY)?;
+        let mut roi_bin = Mat::default();
+        roi_bin_f.convert_to(&mut roi_bin, CV_8UC1, 1.0, 0.0)?;
 
-        // resize direct du masque natif (ex: 256x256) vers la taille de l'image originale
-        let mask_mat = Mat::new_rows_cols_with_data(
-            mask_h as i32, mask_w as i32, best_mask_raw,
-        )?.try_clone()?; // clone car la data source (slice) doit survivre sinon
-
-        let mut resized_mask = Mat::default();
-        imgproc::resize(
-            &mask_mat, &mut resized_mask,
-            opencv::core::Size::new(self.orig_width, self.orig_height),
-            0.0, 0.0, imgproc::INTER_LINEAR,
-        )?;
-
-        // Binarisation directe du Mat f32 (équivalent de `score > 0.0 -> 255 else 0`)
-        let mut mat_bin_f32 = Mat::default();
-        imgproc::threshold(
-            &resized_mask,
-            &mut mat_bin_f32,
-            0.0,
-            255.0,
-            imgproc::THRESH_BINARY,
-        )?;
-
-        // Conversion CV_32F -> CV_8U
-        let mut mat_bin = Mat::default();
-        mat_bin_f32.convert_to(&mut mat_bin, opencv::core::CV_8UC1, 1.0, 0.0)?;
-
-        Ok(Mask{
-            mat: Mat::default(),
-            _mat_bin: mat_bin.try_clone()?,
-        })
+        let mut dst = Mat::roi_mut(&mut full, Rect::new(x0, y0, rw, rh))?;
+        roi_bin.copy_to(&mut dst)?;
+        drop(dst);
+        Ok(Mask { mat: Mat::default(), _mat_bin: full })
     }
 }

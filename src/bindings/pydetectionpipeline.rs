@@ -198,6 +198,20 @@ impl PyDetectionPipeline {
         }
         if has_ref{
             let _ = self.sam2_processor.lock().unwrap().set_image(&image_rust.mat);
+            let idx: Vec<usize> = vec_detections.iter().enumerate()
+                .filter(|(_, d)| matches!(d.categorie, DetectionClass::Produit)).map(|(i, _)| i).collect();
+                    let boxes: Vec<_> = idx.iter().map(|&i| vec_detections[i].bbox.xyxyn()).collect();
+                    match self.sam2_processor.lock().unwrap().predict_boxes(&boxes) {
+                        Ok(masks) => for (&i, m) in idx.iter().zip(masks) {
+                            vec_detections[i].mask._mat_bin = m._mat_bin;
+                            if let Some(h) = homography.as_ref() {
+                                if let Ok((w, hh)) = vec_detections[i].get_real_size_from_homography(h) {
+                                    vec_detections[i].set_size(w, hh);
+                                }
+                            }
+                        },
+                        Err(e) => eprintln!("[produit] sam2: {e:#}"),
+            }
         }
 
         let mut assignments: Vec<(usize, f32)> = Vec::new();
@@ -275,21 +289,6 @@ impl PyDetectionPipeline {
                         println!("VLM : aucun des candidats (OOB {:.2})", r.conf);
                     },
                 }
-            }
-        }
-
-        if !has_ref {
-            return Ok(());
-        }
-
-        match self.predict_mask(detection.bbox.xyxyn()) {
-            Ok(mask) => detection.mask._mat_bin = mask._mat_bin,
-            Err(e) => eprintln!("[produit] sam2: {e:#}"),
-        }
-        // Taille réelle : seulement si on a une homographie
-        if let Some(h) = h {
-            if let Ok((width_cm, height_cm)) = detection.get_real_size_from_homography(h) {
-                detection.set_size(width_cm, height_cm);
             }
         }
         Ok(())
