@@ -218,7 +218,7 @@ impl PyDetectionPipeline {
         for detection in vec_detections.iter_mut() {
             match detection.categorie {
                 DetectionClass::Produit => {
-                    let _ = self.classify_produit(detection, homography.as_ref(), has_ref);
+                    let _ = self.classify_produit(detection);
                     self.resolver.resolve(detection);
                 }
                 DetectionClass::Etiquette => {
@@ -259,7 +259,7 @@ impl PyDetectionPipeline {
             .predict_box(bbox)
     }
 
-    fn classify_produit(&self, detection: &mut Detection, h: Option<&Mat>, has_ref: bool) ->  Result<(), Box<dyn std::error::Error>> {
+    fn classify_produit(&self, detection: &mut Detection) ->  Result<(), Box<dyn std::error::Error>> {
         let gate = Gate { 
             accept_sim: self.config.accept_sim,
             accept_margin: self.config.accept_margin,
