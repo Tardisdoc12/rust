@@ -1,6 +1,7 @@
 
 use ort::session::Session;
-use ort::ep::cuda::CUDA;
+use ort::ep::ArenaExtendStrategy;
+use ort::ep::cuda::{CUDA, CuDNNConvAlgorithmSearch};
 
 pub fn setup_model_avec_cache(
         // signature simplifiée pour l'exemple ; dans yolo_26.rs gardez
