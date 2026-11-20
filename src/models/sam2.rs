@@ -1,3 +1,9 @@
+//--------------------------------------------------------------------------------------------------
+// Filename: sam2.rs
+// Author: Jean Anquetil
+// Date: Friday 20/11/2026
+//--------------------------------------------------------------------------------------------------
+
 use ort::session::Session;
 use ort::value::Value;
 use opencv::core::Mat;
@@ -174,7 +180,7 @@ impl Sam2Processor {
             // meilleur masque parmi num_masks, comme masks[np.argmax(scores)]
             let best = (0..nm).max_by(|&a, &b| iou[i * nm + a].partial_cmp(&iou[i * nm + b]).unwrap()).unwrap_or(0);
             let start = (i * nm + best) * mh * mw;
-            result.push(self.mask_to_full(&mdata[start..start + mh * mw], mh, mw)?);
+            result.push(Self::mask_to_full(ow, oh, &mdata[start..start + mh * mw], mh, mw)?);
         }
         Ok(result)
     }
@@ -184,9 +190,8 @@ impl Sam2Processor {
     /// où un pixel peut être positif : l'interpolation bilinéaire est une moyenne pondérée, donc hors du rectangle englobant
     /// des logits > 0 (élargi d'un pixel natif) le résultat est <= 0. (Écart mesuré en Python : 1 à 3 pixels sur 12-24 millions,
     /// dû à l'arithmétique à virgule fixe de warpAffine.)
-    fn mask_to_full(&self, low: &[f32], mh: usize, mw: usize) -> anyhow::Result<Mask> {
+    fn mask_to_full(ow: i32, oh: i32, low: &[f32], mh: usize, mw: usize) -> anyhow::Result<Mask> {
         use opencv::core::{Rect, Scalar, Size, BORDER_REPLICATE, CV_8UC1};
-        let (ow, oh) = (self.orig_width, self.orig_height);
         let mut full = Mat::zeros(oh, ow, CV_8UC1)?.to_mat()?;
 
         // rectangle englobant des logits > 0
@@ -221,3 +226,7 @@ impl Sam2Processor {
         Ok(Mask { mat: Mat::default(), _mat_bin: full })
     }
 }
+
+//--------------------------------------------------------------------------------------------------
+// END OF FILE
+//--------------------------------------------------------------------------------------------------
