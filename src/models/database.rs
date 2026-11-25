@@ -1,10 +1,11 @@
 //--------------------------------------------------------------------------------------------------
 // Filename: database.rs
 // Author: Jean Anquetil
-// Date: Wednesday 18/11/2026
+// Date: Wednesday 25/11/2026
 //--------------------------------------------------------------------------------------------------
 
 use std::{collections::HashMap, fs, path::Path};
+use anyhow::Context;
 use serde::Deserialize;
 
 //--------------------------------------------------------------------------------------------------
@@ -45,7 +46,7 @@ fn ean_str(v: &serde_json::Value) -> String {
 
 /// Lecteur .npy minimal : version 1/2/3, little-endian, C-order, 2-D, dtype <f4 ou <f2.
 fn read_npy(path: &Path) -> anyhow::Result<(Vec<f32>, usize, usize)> {
-    let b = fs::read(path)?;
+    let b = fs::read(path).with_context(|| format!("lecture de {}", path.display()))?;
     anyhow::ensure!(b.len() > 10 && &b[..6] == b"\x93NUMPY", "pas un fichier .npy");
     let (hlen, off) = if b[6] == 1 { (u16::from_le_bytes([b[8], b[9]]) as usize, 10) }
                       else { (u32::from_le_bytes([b[8], b[9], b[10], b[11]]) as usize, 12) };
@@ -74,7 +75,7 @@ fn read_npy(path: &Path) -> anyhow::Result<(Vec<f32>, usize, usize)> {
 impl Db {
     pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let path = path.as_ref();
-        let meta: Meta = serde_json::from_slice(&fs::read(path.join("meta.json"))?)?;
+        let meta: Meta = serde_json::from_slice(&fs::read(path.join("meta.json")).with_context(|| format!("lecture de {}", path.join("meta.json").display()))?)?;
         let (emb, m, dim) = read_npy(&path.join("embeddings.npy"))?;
         anyhow::ensure!(m == meta.items.len(), "embeddings.npy ({m}) et meta.json ({}) ne correspondent pas", meta.items.len());
         let item_eans: Vec<String> = meta.items.iter().map(|i| ean_str(&i.ean)).collect();
@@ -83,14 +84,19 @@ impl Db {
         let codes: Vec<usize> = item_eans.iter().map(|e| code_of[e]).collect();
         let mut idx_by_code = vec![Vec::new(); eans.len()];
         for (i, &c) in codes.iter().enumerate() { idx_by_code[c].push(i); }
-        let paths: Vec<String> = meta.items.iter().map(|i| i.path.clone().unwrap_or_default()).collect();
+        // chemins relatifs (cas de compact_refs.py) : résolus par rapport au dossier de la base ; "" = pas d'image gardée
+        let paths: Vec<String> = meta.items.iter().map(|i| {
+            let p = i.path.clone().unwrap_or_default();
+            if p.is_empty() || Path::new(&p).is_absolute() || Path::new(&p).exists() { p } else { path.join(&p).to_string_lossy().into_owned() }
+        }).collect();
         Ok(Self { emb, dim, m, eans, paths, codes, idx_by_code, code_of, names: meta.names, model: meta.model, pretrained: meta.pretrained })
     }
 
     /// Photos de référence du produit `c` les plus proches de la requête, sans quasi-doublons (cos < dedup).
     /// `sims` : similarités de tous les items (1er résultat de rank).
     pub fn pick_refs(&self, sims: &[f32], c: usize, n: usize, dedup: f32) -> Vec<&str> {
-        let mut idx = self.idx_by_code[c].clone();
+        // seuls les items qui ont une image de référence sont candidats (base compactée : path vide ailleurs)
+        let mut idx: Vec<usize> = self.idx_by_code[c].iter().copied().filter(|&i| !self.paths[i].is_empty()).collect();
         idx.sort_by(|&a, &b| sims[b].partial_cmp(&sims[a]).unwrap_or(std::cmp::Ordering::Equal));
         let row = |i: usize| &self.emb[i * self.dim..(i + 1) * self.dim];
         let mut chosen: Vec<usize> = Vec::new();
