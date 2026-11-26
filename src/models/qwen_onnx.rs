@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use opencv::{core::{Mat, Size, CV_32F}, imgproc, prelude::*};
-use ort::{session::Session, value::Tensor};
+use ort::{session::{RunOptions, Session}, value::Tensor};
 use tokenizers::Tokenizer;
 
 use crate::models::vlm::{Part, Prompt, VlmBackend, LETTERS, NONE_LETTER};
@@ -100,6 +100,17 @@ fn rope_positions(ids: &[i64], image_pad: i64, grids: &[(usize, usize)], time_sc
 
 //--------------------------------------------------------------------------------------------------
 
+/// Options de run qui rendent au GPU la mémoire inutilisée du pool (arena) à la fin du run.
+/// Sans ça, chaque session garde à vie le pic de mémoire atteint (séquence la plus longue, etc.).
+/// Créées à chaque appel : coût négligeable, et évite tout souci de Send/Sync sur la struct.
+fn shrink_opts() -> anyhow::Result<RunOptions> {
+    let mut opts = RunOptions::new()?;
+    opts.add_config_entry("memory.enable_memory_arena_shrinkage", "gpu:0")?;
+    Ok(opts)
+}
+
+//--------------------------------------------------------------------------------------------------
+
 struct Past { name: String, f16: bool }
 
 /// Une image prête pour l'encodeur visuel.
@@ -131,7 +142,8 @@ impl QwenOnnx {
         }
         let pad_id = tok.token_to_id("<|image_pad|>").ok_or_else(|| anyhow::anyhow!("<|image_pad|> absent"))? as i64;
         let visual = setup_model_avec_cache(&visual_path, device)?;
-        let embed = setup_model_avec_cache(&embed_path, device)?;
+        // embed_tokens = simple table de correspondance (~1,2 Go en fp32) : aussi rapide sur CPU, libère la VRAM
+        let embed = setup_model_avec_cache(&embed_path, "cpu")?;
         let decoder = setup_model_avec_cache(&decoder_path, device)?;
         // [ORT] entrées du décodeur dont le nom commence par "past_key_values" + leur type (fp16 ou fp32)
         let past = decoder.inputs().iter().filter(|i| i.name().starts_with("past_key_values"))
@@ -139,7 +151,7 @@ impl QwenOnnx {
             .collect::<Vec<_>>();
         anyhow::ensure!(!past.is_empty(), "aucune entrée past_key_values : ce n'est pas le décodeur 'merged' attendu");
         Ok(Self { visual, embed, decoder, tok, letter_ids, pad_id, past, kv_heads, head_dim,
-                  time_scale: tokens_per_second, min_pixels: 56 * 56, max_pixels: 28 * 28 * 768 })
+                  time_scale: tokens_per_second, min_pixels: 56 * 56, max_pixels: 28 * 28 * 256 })   // 256 tokens max / image (avant : 768)
     }
 
     /// Encodeur visuel sur UNE image : retourne ses features ((gh/2)*(gw/2) x hidden, aplaties).
@@ -150,10 +162,11 @@ impl QwenOnnx {
         anyhow::ensure!(img.patches.len() == n_patch * PATCH_DIM,
             "patches incohérents : {} valeurs pour {}x{} patches", img.patches.len(), img.gh, img.gw);
 
-        let vis = self.visual.run(ort::inputs![
+        let opts = shrink_opts()?;
+        let vis = self.visual.run_with_options(ort::inputs![
             "pixel_values" => Tensor::from_array(([n_patch, PATCH_DIM], img.patches.into_boxed_slice()))?,
             "image_grid_thw" => Tensor::from_array(([1usize, 3usize], vec![1i64, img.gh as i64, img.gw as i64].into_boxed_slice()))?,
-        ])?;
+        ], &opts)?;
         let (vs, vd) = vis[0].try_extract_tensor::<f32>()?;           // [ORT] sortie par indice
         let out_hidden = vs[vs.len() - 1] as usize;
         anyhow::ensure!(out_hidden == hidden,
@@ -235,7 +248,8 @@ impl VlmBackend for QwenOnnx {
                     else      { Tensor::from_array((shape, Vec::<f32>::new().into_boxed_slice()))?.into_dyn() };
             inputs.push((p.name.clone(), v.into()));
         }
-        let out = self.decoder.run(inputs)?;
+        let opts = shrink_opts()?;
+        let out = self.decoder.run_with_options(inputs, &opts)?;
         let (shape, lg) = out[0].try_extract_tensor::<f32>()?;        // logits fp32 attendus ; sinon utiliser la variante fp32
         let v = shape[shape.len() - 1] as usize;
         Ok(lg[lg.len() - v..].to_vec())                                // dernière position seulement
