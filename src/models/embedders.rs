@@ -90,7 +90,11 @@ impl ModelPipeline for Embedder {
         let mut f = Mat::default();
         small.convert_to(&mut f, CV_32F, 1.0 / 127.5, -1.0)?;
         // 4) HWC -> CHW
-        let hwc = f.data_typed::<f32>()?; // contigu après resize/convert_to
+        let hwc: Vec<f32> = f
+            .data_typed::<opencv::core::Vec3f>()?   // lit des triplets (CV_32FC3)
+            .iter()
+            .flat_map(|v| v.0)                       // → [c0, c1, c2, c0, c1, c2, ...] (HWC)
+            .collect();// contigu après resize/convert_to
         let (h, w) = (SIZE as usize, SIZE as usize);
         let mut chw = vec![0f32; 3 * h * w];
         for i in 0..h * w { for c in 0..3 { chw[c * h * w + i] = hwc[i * 3 + c]; } }

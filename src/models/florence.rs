@@ -71,7 +71,11 @@ impl ModelPipeline for Florence {
         imgproc::resize(&sq, &mut r, Size::new(s, s), 0.0, 0.0, interp)?;
         let mut f = Mat::default();
         r.convert_to(&mut f, CV_32F, 1.0 / 255.0, 0.0)?;
-        let px = f.data_typed::<f32>()?;                         // HWC
+        let px: Vec<f32> = f
+            .data_typed::<opencv::core::Vec3f>()?   // lit des triplets (CV_32FC3)
+            .iter()
+            .flat_map(|v| v.0)                       // → [c0, c1, c2, c0, c1, c2, ...] (HWC)
+            .collect();                       // HWC
         let n = g.img_size * g.img_size;
         let mut chw = vec![0f32; 3 * n];
         for i in 0..n { for c in 0..3 { chw[c * n + i] = (px[i * 3 + c] - g.mean[c]) / g.std[c]; } }

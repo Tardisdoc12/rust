@@ -50,7 +50,11 @@ fn patchify(img: &Mat, min_pixels: i32, max_pixels: i32) -> anyhow::Result<(Vec<
     imgproc::resize(&rgb, &mut r, Size::new(w, h), 0.0, 0.0, interp)?;
     let mut f = Mat::default();
     r.convert_to(&mut f, CV_32F, 1.0 / 255.0, 0.0)?;
-    let px = f.data_typed::<f32>()?;                       // HWC
+    let px: Vec<f32> = f
+        .data_typed::<opencv::core::Vec3f>()?   // lit des triplets (CV_32FC3)
+        .iter()
+        .flat_map(|v| v.0)                       // → [c0, c1, c2, c0, c1, c2, ...] (HWC)
+        .collect();                       // HWC
     let (h, w) = (h as usize, w as usize);
     let (gh, gw) = (h / P, w / P);
     let (a_n, b_n) = (gh / MERGE, gw / MERGE);
