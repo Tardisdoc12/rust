@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::time::Instant;
 use opencv::{core::{Mat, Size, CV_32F}, imgproc, prelude::*};
 use ort::{session::{RunOptions, Session}, value::Tensor};
 use tokenizers::Tokenizer;
@@ -210,6 +211,7 @@ impl VlmBackend for QwenOnnx {
     fn letter_ids(&self) -> &HashMap<char, Vec<u32>> { &self.letter_ids }
 
     fn first_token_logits(&mut self, prompt: &Prompt) -> anyhow::Result<Vec<f32>> {
+        let t_total = Instant::now();
         // 1) texte = chat template Qwen2.5-VL (les morceaux sont concaténés SANS séparateur, comme le template HF ;
         //    une image devient <|vision_start|><|image_pad|>*n<|vision_end|>). La grille est calculée sans patchify.
         let mut order: Vec<usize> = Vec::new();          // indices dans prompt.images, dans l'ordre des <|image_pad|>
@@ -234,6 +236,7 @@ impl VlmBackend for QwenOnnx {
         let s = ids.len();
 
         // 2) embeddings des tokens (donne aussi la dimension cachée, même sans image)
+        let t_embed = Instant::now();
         let emb = self.embed.run(ort::inputs!["input_ids" => Tensor::from_array(([1usize, s], ids.clone().into_boxed_slice()))?])?;
         let (es, ed) = emb[0].try_extract_tensor::<f32>()?;
         let hidden = es[es.len() - 1] as usize;
@@ -241,15 +244,21 @@ impl VlmBackend for QwenOnnx {
         drop(emb);
         anyhow::ensure!(embeds.len() == s * hidden, "dimension cachée incohérente");
 
+        let d_embed = t_embed.elapsed();
+
         // 3) encodeur visuel : UNE image par appel, et seulement si elle n'est pas déjà en cache
+        let t_visual = Instant::now();
+        let (mut hits, mut misses) = (0usize, 0usize);
         let mut img_feats: Vec<f32> = Vec::new();
         for (&i, &(gh, gw)) in order.iter().zip(&grids) {
             let img = prompt.images[i];
             let key = image_key(img)?;
             if let Some(f) = self.feat_cache.get(&key) {
                 img_feats.extend_from_slice(f);
+                hits += 1;
                 continue;
             }
+            misses += 1;
             let (p, pgh, pgw) = patchify(img, self.min_pixels, self.max_pixels)?;
             anyhow::ensure!((pgh, pgw) == (gh, gw), "grille incohérente entre grid_of et patchify");
             let feats = self.encode_image(ImagePatches { patches: p, gh, gw }, hidden)?;
@@ -257,6 +266,7 @@ impl VlmBackend for QwenOnnx {
             if self.feat_cache.len() >= FEAT_CACHE_MAX { self.feat_cache.clear(); }   // purge simple
             self.feat_cache.insert(key, feats);
         }
+        let d_visual = t_visual.elapsed();
 
         // 4) injection des features aux positions <|image_pad|>
         let mut k = 0usize;
@@ -282,11 +292,22 @@ impl VlmBackend for QwenOnnx {
                     else      { Tensor::from_array((shape, Vec::<f32>::new().into_boxed_slice()))?.into_dyn() };
             inputs.push((p.name.clone(), v.into()));
         }
+        let t_decoder = Instant::now();
         let opts = shrink_opts()?;
         let out = self.decoder.run_with_options(inputs, &opts)?;
+        let d_decoder = t_decoder.elapsed();
         let (shape, lg) = out[0].try_extract_tensor::<f32>()?;        // logits fp32 attendus ; sinon utiliser la variante fp32
         let v = shape[shape.len() - 1] as usize;
-        Ok(lg[lg.len() - v..].to_vec())                                // dernière position seulement
+        let logits = lg[lg.len() - v..].to_vec();                       // dernière position seulement
+
+        eprintln!(
+            "[vlm timing] total {:>6.0} ms | visuel {:>6.0} ms ({} images : {} encodées, {} en cache) | embed {:>4.0} ms | décodeur {:>6.0} ms ({} tokens)",
+            t_total.elapsed().as_secs_f64() * 1e3,
+            d_visual.as_secs_f64() * 1e3, hits + misses, misses, hits,
+            d_embed.as_secs_f64() * 1e3,
+            d_decoder.as_secs_f64() * 1e3, s,
+        );
+        Ok(logits)
     }
 }
 
