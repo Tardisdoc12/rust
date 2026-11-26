@@ -130,6 +130,32 @@ fn grid_of(img: &Mat, min_pixels: i32, max_pixels: i32) -> (usize, usize) {
     (h as usize / P, w as usize / P)
 }
 
+/// true si l'entrée/sortie `name` de la session est en float16 (même détection que pour past_key_values).
+fn is_f16(outlets: &[ort::value::Outlet], name: &str) -> bool {
+    outlets.iter().find(|o| o.name() == name).map(|o| format!("{:?}", o).contains("Float16")).unwrap_or(false)
+}
+
+/// Vec<f32> -> tenseur ORT en f32 ou f16 selon ce qu'attend le modèle.
+fn tensor_f32_or_f16<const N: usize>(shape: [usize; N], data: Vec<f32>, f16: bool) -> anyhow::Result<ort::value::DynValue> {
+    Ok(if f16 {
+        let h: Vec<half::f16> = data.into_iter().map(half::f16::from_f32).collect();
+        Tensor::from_array((shape, h.into_boxed_slice()))?.into_dyn()
+    } else {
+        Tensor::from_array((shape, data.into_boxed_slice()))?.into_dyn()
+    })
+}
+
+/// Extrait une sortie (f32 ou f16) en (shape, Vec<f32>).
+fn extract_f32(v: &ort::value::DynValue, f16: bool) -> anyhow::Result<(Vec<i64>, Vec<f32>)> {
+    Ok(if f16 {
+        let (sh, d) = v.try_extract_tensor::<half::f16>()?;
+        (sh.to_vec(), d.iter().map(|x| x.to_f32()).collect())
+    } else {
+        let (sh, d) = v.try_extract_tensor::<f32>()?;
+        (sh.to_vec(), d.to_vec())
+    })
+}
+
 //--------------------------------------------------------------------------------------------------
 
 struct Past { name: String, f16: bool }
@@ -149,6 +175,8 @@ pub struct QwenOnnx {
     /// à chaque permutation et d'un produit à l'autre : on ne les encode qu'une fois. Résultat identique
     /// (l'encodeur traite chaque image indépendamment), seul le temps change.
     feat_cache: HashMap<u64, Vec<f32>>,
+    /// Types détectés au chargement : permet d'utiliser indifféremment les variantes fp32 / fp16 / q4 / q4f16.
+    vis_in_f16: bool, vis_out_f16: bool, dec_in_f16: bool, dec_out_f16: bool,
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -175,9 +203,18 @@ impl QwenOnnx {
             .map(|i| Past { name: i.name().to_string(), f16: format!("{:?}", i).contains("Float16") })
             .collect::<Vec<_>>();
         anyhow::ensure!(!past.is_empty(), "aucune entrée past_key_values : ce n'est pas le décodeur 'merged' attendu");
+        let vis_in_f16 = is_f16(visual.inputs(), "pixel_values");
+        let vis_out_f16 = visual.outputs().first().map(|o| format!("{:?}", o).contains("Float16")).unwrap_or(false);
+        let dec_in_f16 = is_f16(decoder.inputs(), "inputs_embeds");
+        let dec_out_f16 = decoder.outputs().first().map(|o| format!("{:?}", o).contains("Float16")).unwrap_or(false);
+        eprintln!("[vlm] types : visuel entrée {} / sortie {} | décodeur inputs_embeds {} / logits {}",
+            if vis_in_f16 { "f16" } else { "f32" }, if vis_out_f16 { "f16" } else { "f32" },
+            if dec_in_f16 { "f16" } else { "f32" }, if dec_out_f16 { "f16" } else { "f32" });
+
         Ok(Self { visual, embed, decoder, tok, letter_ids, pad_id, past, kv_heads, head_dim,
-                  time_scale: tokens_per_second, min_pixels: 56 * 56, max_pixels: 28 * 28 * 256,
-                  feat_cache: HashMap::new() })   // 256 tokens max / image (avant : 768)
+                  time_scale: tokens_per_second, min_pixels: 56 * 56, max_pixels: 28 * 28 * 256,   // 256 tokens max / image
+                  feat_cache: HashMap::new(),
+                  vis_in_f16, vis_out_f16, dec_in_f16, dec_out_f16 })
     }
 
     /// Encodeur visuel sur UNE image : retourne ses features ((gh/2)*(gw/2) x hidden, aplaties).
@@ -190,10 +227,10 @@ impl QwenOnnx {
 
         let opts = shrink_opts()?;
         let vis = self.visual.run_with_options(ort::inputs![
-            "pixel_values" => Tensor::from_array(([n_patch, PATCH_DIM], img.patches.into_boxed_slice()))?,
+            "pixel_values" => tensor_f32_or_f16([n_patch, PATCH_DIM], img.patches, self.vis_in_f16)?,
             "image_grid_thw" => Tensor::from_array(([1usize, 3usize], vec![1i64, img.gh as i64, img.gw as i64].into_boxed_slice()))?,
         ], &opts)?;
-        let (vs, vd) = vis[0].try_extract_tensor::<f32>()?;           // [ORT] sortie par indice
+        let (vs, vd) = extract_f32(&vis[0], self.vis_out_f16)?;      // [ORT] sortie par indice, convertie en f32
         let out_hidden = vs[vs.len() - 1] as usize;
         anyhow::ensure!(out_hidden == hidden,
             "dimension cachée visuelle ({out_hidden}) différente de celle des embeddings texte ({hidden})");
@@ -201,7 +238,7 @@ impl QwenOnnx {
         let expected_tokens = (img.gh / MERGE) * (img.gw / MERGE);
         anyhow::ensure!(vd.len() == expected_tokens * hidden,
             "encodeur visuel : {} valeurs, attendu {} tokens x {}", vd.len(), expected_tokens, hidden);
-        Ok(vd.to_vec())
+        Ok(vd)
     }
 }
 
@@ -282,7 +319,7 @@ impl VlmBackend for QwenOnnx {
         // 5) décodeur : cache vide, une passe, logits du dernier token
         let pos = rope_positions(&ids, self.pad_id, &grids, self.time_scale);
         let mut inputs: Vec<(String, ort::session::SessionInputValue<'_>)> = vec![   // [ORT] entrées dynamiques
-            ("inputs_embeds".into(), Tensor::from_array(([1usize, s, hidden], embeds.into_boxed_slice()))?.into_dyn().into()),
+            ("inputs_embeds".into(), tensor_f32_or_f16([1usize, s, hidden], embeds, self.dec_in_f16)?.into()),
             ("attention_mask".into(), Tensor::from_array(([1usize, s], vec![1i64; s].into_boxed_slice()))?.into_dyn().into()),
             ("position_ids".into(), Tensor::from_array(([3usize, 1, s], pos.into_boxed_slice()))?.into_dyn().into()),
         ];
@@ -296,7 +333,7 @@ impl VlmBackend for QwenOnnx {
         let opts = shrink_opts()?;
         let out = self.decoder.run_with_options(inputs, &opts)?;
         let d_decoder = t_decoder.elapsed();
-        let (shape, lg) = out[0].try_extract_tensor::<f32>()?;        // logits fp32 attendus ; sinon utiliser la variante fp32
+        let (shape, lg) = extract_f32(&out[0], self.dec_out_f16)?;    // logits f32 ou f16 -> f32
         let v = shape[shape.len() - 1] as usize;
         let logits = lg[lg.len() - v..].to_vec();                       // dernière position seulement
 
