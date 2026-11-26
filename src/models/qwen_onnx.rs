@@ -145,15 +145,15 @@ fn tensor_f32_or_f16<const N: usize>(shape: [usize; N], data: Vec<f32>, f16: boo
     })
 }
 
-/// Extrait une sortie (f32 ou f16) en (shape, Vec<f32>).
-fn extract_f32(v: &ort::value::DynValue, f16: bool) -> anyhow::Result<(Vec<i64>, Vec<f32>)> {
-    Ok(if f16 {
-        let (sh, d) = v.try_extract_tensor::<half::f16>()?;
-        (sh.to_vec(), d.iter().map(|x| x.to_f32()).collect())
-    } else {
-        let (sh, d) = v.try_extract_tensor::<f32>()?;
-        (sh.to_vec(), d.to_vec())
-    })
+/// Extrait une sortie en (shape, Vec<f32>), qu'elle soit en f32 ou en f16 : le type est lu sur le tenseur
+/// lui-même au moment de l'extraction (plus fiable que la détection faite au chargement).
+fn extract_f32(v: &ort::value::DynValue) -> anyhow::Result<(Vec<i64>, Vec<f32>)> {
+    if let Ok((sh, d)) = v.try_extract_tensor::<f32>() {
+        return Ok((sh.to_vec(), d.to_vec()));
+    }
+    let (sh, d) = v.try_extract_tensor::<half::f16>()
+        .map_err(|e| anyhow::anyhow!("sortie ni f32 ni f16 : {e}"))?;
+    Ok((sh.to_vec(), d.iter().map(|x| x.to_f32()).collect()))
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -230,7 +230,7 @@ impl QwenOnnx {
             "pixel_values" => tensor_f32_or_f16([n_patch, PATCH_DIM], img.patches, self.vis_in_f16)?,
             "image_grid_thw" => Tensor::from_array(([1usize, 3usize], vec![1i64, img.gh as i64, img.gw as i64].into_boxed_slice()))?,
         ], &opts)?;
-        let (vs, vd) = extract_f32(&vis[0], self.vis_out_f16)?;      // [ORT] sortie par indice, convertie en f32
+        let (vs, vd) = extract_f32(&vis[0])?;      // [ORT] sortie par indice, convertie en f32
         let out_hidden = vs[vs.len() - 1] as usize;
         anyhow::ensure!(out_hidden == hidden,
             "dimension cachée visuelle ({out_hidden}) différente de celle des embeddings texte ({hidden})");
@@ -275,9 +275,8 @@ impl VlmBackend for QwenOnnx {
         // 2) embeddings des tokens (donne aussi la dimension cachée, même sans image)
         let t_embed = Instant::now();
         let emb = self.embed.run(ort::inputs!["input_ids" => Tensor::from_array(([1usize, s], ids.clone().into_boxed_slice()))?])?;
-        let (es, ed) = emb[0].try_extract_tensor::<f32>()?;
+        let (es, mut embeds) = extract_f32(&emb[0])?;                  // f32 ou f16 selon la variante d'embed_tokens
         let hidden = es[es.len() - 1] as usize;
-        let mut embeds = ed.to_vec();
         drop(emb);
         anyhow::ensure!(embeds.len() == s * hidden, "dimension cachée incohérente");
 
@@ -333,7 +332,7 @@ impl VlmBackend for QwenOnnx {
         let opts = shrink_opts()?;
         let out = self.decoder.run_with_options(inputs, &opts)?;
         let d_decoder = t_decoder.elapsed();
-        let (shape, lg) = extract_f32(&out[0], self.dec_out_f16)?;    // logits f32 ou f16 -> f32
+        let (shape, lg) = extract_f32(&out[0])?;    // logits f32 ou f16 -> f32
         let v = shape[shape.len() - 1] as usize;
         let logits = lg[lg.len() - v..].to_vec();                       // dernière position seulement
 
