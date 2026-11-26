@@ -32,7 +32,7 @@ use crate::functions_::utils::compute_homography_from_reference;
 //--------------------------------------------------------------------------------------------------
 
 fn to_py_err(e: anyhow::Error) -> PyErr {
-    PyRuntimeError::new_err(e.to_string())
+    PyRuntimeError::new_err(format!("{e:#}"))
 }
 
 fn process_locked<M: ModelPipeline>(
