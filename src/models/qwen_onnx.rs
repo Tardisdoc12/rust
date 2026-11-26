@@ -143,7 +143,7 @@ impl QwenOnnx {
         let pad_id = tok.token_to_id("<|image_pad|>").ok_or_else(|| anyhow::anyhow!("<|image_pad|> absent"))? as i64;
         let visual = setup_model_avec_cache(&visual_path, device)?;
         // embed_tokens = simple table de correspondance (~1,2 Go en fp32) : aussi rapide sur CPU, libère la VRAM
-        let embed = setup_model_avec_cache(&embed_path, "cpu")?;
+        let embed = setup_model_avec_cache(&embed_path, device)?;
         let decoder = setup_model_avec_cache(&decoder_path, device)?;
         // [ORT] entrées du décodeur dont le nom commence par "past_key_values" + leur type (fp16 ou fp32)
         let past = decoder.inputs().iter().filter(|i| i.name().starts_with("past_key_values"))
