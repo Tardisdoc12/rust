@@ -156,6 +156,19 @@ fn extract_f32(v: &ort::value::DynValue) -> anyhow::Result<(Vec<i64>, Vec<f32>)>
     Ok((sh.to_vec(), d.iter().map(|x| x.to_f32()).collect()))
 }
 
+/// Logits du DERNIER token seulement, convertis en f32. La sortie complète fait [1, S, vocab]
+/// (≈ 1850 x 152 000 valeurs) : la convertir entièrement coûtait ~800 ms pour n'en garder qu'une ligne.
+fn last_logits(v: &ort::value::DynValue) -> anyhow::Result<Vec<f32>> {
+    if let Ok((sh, d)) = v.try_extract_tensor::<f32>() {
+        let n = sh[sh.len() - 1] as usize;
+        return Ok(d[d.len() - n..].to_vec());
+    }
+    let (sh, d) = v.try_extract_tensor::<half::f16>()
+        .map_err(|e| anyhow::anyhow!("logits ni f32 ni f16 : {e}"))?;
+    let n = sh[sh.len() - 1] as usize;
+    Ok(d[d.len() - n..].iter().map(|x| x.to_f32()).collect())
+}
+
 //--------------------------------------------------------------------------------------------------
 
 struct Past { name: String, f16: bool }
@@ -332,9 +345,7 @@ impl VlmBackend for QwenOnnx {
         let opts = shrink_opts()?;
         let out = self.decoder.run_with_options(inputs, &opts)?;
         let d_decoder = t_decoder.elapsed();
-        let (shape, lg) = extract_f32(&out[0])?;    // logits f32 ou f16 -> f32
-        let v = shape[shape.len() - 1] as usize;
-        let logits = lg[lg.len() - v..].to_vec();                       // dernière position seulement
+        let logits = last_logits(&out[0])?;                             // dernière position seulement
 
         eprintln!(
             "[vlm timing] total {:>6.0} ms | visuel {:>6.0} ms ({} images : {} encodées, {} en cache) | embed {:>4.0} ms | décodeur {:>6.0} ms ({} tokens)",
