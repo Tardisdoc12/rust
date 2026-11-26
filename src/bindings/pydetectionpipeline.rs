@@ -218,17 +218,23 @@ impl PyDetectionPipeline {
         for detection in vec_detections.iter_mut() {
             match detection.categorie {
                 DetectionClass::Produit => {
-                    let _ = self.classify_produit(detection);
+                    if let Err(e) = self.classify_produit(detection) {
+                        eprintln!("[produit] classification échouée : {e}");
+                    }
                     self.resolver.resolve(detection);
                 }
                 DetectionClass::Etiquette => {
-                    let _ = self.classify_etiquette(detection);
+                    if let Err(e) = self.classify_etiquette(detection) {
+                        eprintln!("[etiquette] {e:#}");
+                    }
                     if let Some(idx) = nearest_object(&objects, detection.bbox.center_rel()) {
                         assignments.push((idx, detection.price));
                     }
                 }
                 DetectionClass::Publicity => {
-                    let _ = self.classify_publicity(detection);
+                    if let Err(e) = self.classify_publicity(detection) {
+                        eprintln!("[publicity] {e:#}");
+                    }
                     if detection.price > 0.0 {
                         number_etiquette += 1;
                         if let Some(idx) = nearest_object(&objects, detection.bbox.center_rel()) {
@@ -295,7 +301,15 @@ impl PyDetectionPipeline {
     }
 
     fn classify_etiquette(&self, detection: &mut Detection) -> anyhow::Result<()> {
-        let Ok(result) = process_locked(&self.florence, &detection.mask.mat) else { return Ok(()); };
+        let m = &detection.mask.mat;
+        if m.empty() {
+            anyhow::bail!("crop vide ({}x{})", m.cols(), m.rows());
+        }
+        let result = process_locked(&self.florence, m)?;
+        if result.price.is_none() {
+            eprintln!("[florence] aucun prix extrait du crop {}x{}", m.cols(), m.rows());
+            // si ton résultat Florence a un champ texte brut, affiche-le ici : c'est le plus parlant
+        }
         detection.price = result.price.map(|p| p as f32).unwrap_or(0.0);
         Ok(())
     }
@@ -307,6 +321,20 @@ impl PyDetectionPipeline {
     ) -> anyhow::Result<()> {
         let Ok(result) = process_locked(&self.florence, &detection.mask.mat) else { return Ok(()); };
         
+        detection.price = result.price.map(|p| p as f32).unwrap_or(0.0);
+        Ok(())
+    }
+
+    fn classify_publicity(&self, detection: &mut Detection) -> anyhow::Result<()> {
+        let m = &detection.mask.mat;
+        if m.empty() {
+            anyhow::bail!("crop vide ({}x{})", m.cols(), m.rows());
+        }
+        let result = process_locked(&self.florence, m)?;
+        if result.price.is_none() {
+            eprintln!("[florence] aucun prix extrait du crop {}x{}", m.cols(), m.rows());
+            // si ton résultat Florence a un champ texte brut, affiche-le ici : c'est le plus parlant
+        }
         detection.price = result.price.map(|p| p as f32).unwrap_or(0.0);
         Ok(())
     }

@@ -130,6 +130,7 @@ impl ModelPipeline for Florence {
         let ids: Vec<u32> = raw.chunks(2).map(|c| c[0] as u32).collect();
         let lps: Vec<f64> = raw.chunks(2).map(|c| c[1] as f64).collect();
         let text = tok.decode(&ids, true).map_err(|e| anyhow::anyhow!("{e}"))?.trim().to_string();
+        eprintln!("[florence] texte brut : {text:?}");
         let conf = if lps.is_empty() { 0.0 } else { (lps.iter().sum::<f64>() / lps.len() as f64).exp() as f32 };
         Ok(PriceRead { price: to_price(&text), text, conf })
     }
