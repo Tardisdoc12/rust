@@ -103,9 +103,9 @@ fn rope_positions(ids: &[i64], image_pad: i64, grids: &[(usize, usize)], time_sc
 /// Options de run qui rendent au GPU la mémoire inutilisée du pool (arena) à la fin du run.
 /// Sans ça, chaque session garde à vie le pic de mémoire atteint (séquence la plus longue, etc.).
 /// Créées à chaque appel : coût négligeable, et évite tout souci de Send/Sync sur la struct.
-fn shrink_opts() -> anyhow::Result<RunOptions> {
+fn shrink_opts() -> anyhow::Result<RunOptions<ort::session::NoSelectedOutputs>> {
     let mut opts = RunOptions::new()?;
-    opts.add_config_entry("memory.enable_memory_arena_shrinkage", "gpu:0")?;
+    opts.set("memory.enable_memory_arena_shrinkage", "gpu:0")?;
     Ok(opts)
 }
 
