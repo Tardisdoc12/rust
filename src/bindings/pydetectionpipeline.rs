@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
 use numpy::PyReadonlyArray3;
 use opencv::core::Mat;
+use opencv::prelude::MatTraitConst;
 use tracing_subscriber::EnvFilter;
 
 use crate::processor::processor::Processor;
@@ -315,16 +316,6 @@ impl PyDetectionPipeline {
     }
 
     /// Renvoie l'étiquette (prix) trouvée dans la publicité, si elle existe.
-    fn classify_publicity(
-        &self,
-        detection: &mut Detection,
-    ) -> anyhow::Result<()> {
-        let Ok(result) = process_locked(&self.florence, &detection.mask.mat) else { return Ok(()); };
-        
-        detection.price = result.price.map(|p| p as f32).unwrap_or(0.0);
-        Ok(())
-    }
-
     fn classify_publicity(&self, detection: &mut Detection) -> anyhow::Result<()> {
         let m = &detection.mask.mat;
         if m.empty() {
