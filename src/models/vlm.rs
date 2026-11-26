@@ -77,6 +77,10 @@ fn make_orders(n: usize, perms: usize, seed: u64) -> Vec<Vec<usize>> {
 /// Softmax sur tout le vocabulaire, somme des probas des ids de chaque lettre, renormalisée sur les lettres valides.
 /// None si le modèle ne répond pas par une lettre (masse < min_mass).
 fn probs_from_logits(logits: &[f32], ids: &HashMap<char, Vec<u32>>, letters: &[char], min_mass: f64) -> Option<HashMap<char, f64>> {
+    if logits.iter().any(|x| x.is_nan() || *x == f32::INFINITY) {
+        eprintln!("[vlm] logits invalides (NaN/inf) : débordement fp16 probable, ordre ignoré");
+        return None;
+    }
     let m = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max) as f64;
     let lse = m + logits.iter().map(|&v| (v as f64 - m).exp()).sum::<f64>().ln();
     let p: HashMap<char, f64> = letters.iter().map(|l| {
