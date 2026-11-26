@@ -17,6 +17,7 @@ use crate::functions_::setup_model_avec_cache::setup_model_avec_cache;
 const FACTOR: i32 = 28;           // patch 14 x merge 2
 const P: usize = 14;
 const MERGE: usize = 2;
+const PATCH_DIM: usize = 3 * 2 * P * P;   // 1176 = canaux x temporel x 14 x 14
 const MEAN: [f32; 3] = [0.48145466, 0.4578275, 0.40821073];
 const STD: [f32; 3] = [0.26862954, 0.26130258, 0.27577711];
 
@@ -53,19 +54,19 @@ fn patchify(img: &Mat, min_pixels: i32, max_pixels: i32) -> anyhow::Result<(Vec<
     let px: Vec<f32> = f
         .data_typed::<opencv::core::Vec3f>()?   // lit des triplets (CV_32FC3)
         .iter()
-        .flat_map(|v| v.0)                       // → [c0, c1, c2, c0, c1, c2, ...] (HWC)
-        .collect();                       // HWC
+        .flat_map(|v| v.0)                       // -> [c0, c1, c2, c0, c1, c2, ...] (HWC)
+        .collect();
     let (h, w) = (h as usize, w as usize);
     let (gh, gw) = (h / P, w / P);
     let (a_n, b_n) = (gh / MERGE, gw / MERGE);
-    let mut out = vec![0f32; gh * gw * 3 * 2 * P * P];
+    let mut out = vec![0f32; gh * gw * PATCH_DIM];
     for a in 0..a_n { for b in 0..b_n { for mh in 0..MERGE { for mw in 0..MERGE {
         let row = ((a * b_n + b) * MERGE + mh) * MERGE + mw;
         for c in 0..3 { for ph in 0..P { for pw in 0..P {
             let y = (a * MERGE + mh) * P + ph; let x = (b * MERGE + mw) * P + pw;
             let v = (px[(y * w + x) * 3 + c] - MEAN[c]) / STD[c];
             for t in 0..2 {                                 // image fixe : les 2 images temporelles sont identiques
-                out[row * 1176 + ((c * 2 + t) * P + ph) * P + pw] = v;
+                out[row * PATCH_DIM + ((c * 2 + t) * P + ph) * P + pw] = v;
             }
         }}}
     }}}}
@@ -100,6 +101,9 @@ fn rope_positions(ids: &[i64], image_pad: i64, grids: &[(usize, usize)], time_sc
 //--------------------------------------------------------------------------------------------------
 
 struct Past { name: String, f16: bool }
+
+/// Une image prête pour l'encodeur visuel.
+struct ImagePatches { patches: Vec<f32>, gh: usize, gw: usize }
 
 pub struct QwenOnnx {
     visual: Session, embed: Session, decoder: Session,
@@ -137,6 +141,29 @@ impl QwenOnnx {
         Ok(Self { visual, embed, decoder, tok, letter_ids, pad_id, past, kv_heads, head_dim,
                   time_scale: tokens_per_second, min_pixels: 56 * 56, max_pixels: 28 * 28 * 768 })
     }
+
+    /// Encodeur visuel sur UNE image : retourne ses features ((gh/2)*(gw/2) x hidden, aplaties).
+    /// L'export ONNX (onnx-community) ne gère qu'une image par appel : avec plusieurs images
+    /// concaténées, le Reshape '/model/vision_rope/pad/hidden_5d' échoue.
+    fn encode_image(&mut self, img: ImagePatches, hidden: usize) -> anyhow::Result<Vec<f32>> {
+        let n_patch = img.gh * img.gw;
+        anyhow::ensure!(img.patches.len() == n_patch * PATCH_DIM,
+            "patches incohérents : {} valeurs pour {}x{} patches", img.patches.len(), img.gh, img.gw);
+
+        let vis = self.visual.run(ort::inputs![
+            "pixel_values" => Tensor::from_array(([n_patch, PATCH_DIM], img.patches.into_boxed_slice()))?,
+            "image_grid_thw" => Tensor::from_array(([1usize, 3usize], vec![1i64, img.gh as i64, img.gw as i64].into_boxed_slice()))?,
+        ])?;
+        let (vs, vd) = vis[0].try_extract_tensor::<f32>()?;           // [ORT] sortie par indice
+        let out_hidden = vs[vs.len() - 1] as usize;
+        anyhow::ensure!(out_hidden == hidden,
+            "dimension cachée visuelle ({out_hidden}) différente de celle des embeddings texte ({hidden})");
+
+        let expected_tokens = (img.gh / MERGE) * (img.gw / MERGE);
+        anyhow::ensure!(vd.len() == expected_tokens * hidden,
+            "encodeur visuel : {} valeurs, attendu {} tokens x {}", vd.len(), expected_tokens, hidden);
+        Ok(vd.to_vec())
+    }
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -145,10 +172,10 @@ impl VlmBackend for QwenOnnx {
     fn letter_ids(&self) -> &HashMap<char, Vec<u32>> { &self.letter_ids }
 
     fn first_token_logits(&mut self, prompt: &Prompt) -> anyhow::Result<Vec<f32>> {
-        // 1) images -> patches ; texte = chat template Qwen2.5-VL (les morceaux sont concaténés SANS séparateur,
-        //    comme le template HF ; une image devient <|vision_start|><|image_pad|>*n<|vision_end|>)
-        let mut patches: Vec<f32> = Vec::new();
-        let mut thw: Vec<i64> = Vec::new();
+        // 1) images -> patches (gardées image par image) ; texte = chat template Qwen2.5-VL
+        //    (les morceaux sont concaténés SANS séparateur, comme le template HF ;
+        //    une image devient <|vision_start|><|image_pad|>*n<|vision_end|>)
+        let mut images: Vec<ImagePatches> = Vec::new();
         let mut grids = Vec::new();
         let mut text = String::from("<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n");
         for part in &prompt.parts {
@@ -156,10 +183,11 @@ impl VlmBackend for QwenOnnx {
                 Part::Text(t) => text.push_str(t),
                 Part::Image(i) => {
                     let (p, gh, gw) = patchify(prompt.images[*i], self.min_pixels, self.max_pixels)?;
-                    patches.extend(p); thw.extend([1, gh as i64, gw as i64]); grids.push((gh, gw));
+                    grids.push((gh, gw));
                     text.push_str("<|vision_start|>");
                     for _ in 0..(gh / MERGE) * (gw / MERGE) { text.push_str("<|image_pad|>"); }
                     text.push_str("<|vision_end|>");
+                    images.push(ImagePatches { patches: p, gh, gw });   // même ordre que les <|image_pad|>
                 }
             }
         }
@@ -168,23 +196,22 @@ impl VlmBackend for QwenOnnx {
             .get_ids().iter().map(|&i| i as i64).collect();
         let s = ids.len();
 
-        // 2) encodeur visuel (toutes les images d'un coup ; vérifie que l'export accepte plusieurs images)
-        let (n_img, n_patch) = (thw.len() / 3, patches.len() / 1176);
-        let vis = self.visual.run(ort::inputs![
-            "pixel_values" => Tensor::from_array(([n_patch, 1176usize], patches.into_boxed_slice()))?,
-            "image_grid_thw" => Tensor::from_array(([n_img, 3usize], thw.into_boxed_slice()))?,
-        ])?;
-        let (vs, vd) = vis[0].try_extract_tensor::<f32>()?;           // [ORT] sortie par indice
-        let hidden = vs[vs.len() - 1] as usize;
-        let img_feats = vd.to_vec();
-        drop(vis);
-
-        // 3) embeddings des tokens + injection des features aux positions <|image_pad|>
+        // 2) embeddings des tokens (donne aussi la dimension cachée, même sans image)
         let emb = self.embed.run(ort::inputs!["input_ids" => Tensor::from_array(([1usize, s], ids.clone().into_boxed_slice()))?])?;
-        let (_, ed) = emb[0].try_extract_tensor::<f32>()?;
+        let (es, ed) = emb[0].try_extract_tensor::<f32>()?;
+        let hidden = es[es.len() - 1] as usize;
         let mut embeds = ed.to_vec();
         drop(emb);
         anyhow::ensure!(embeds.len() == s * hidden, "dimension cachée incohérente");
+
+        // 3) encodeur visuel : UNE image par appel, features concaténées dans l'ordre du prompt
+        let mut img_feats: Vec<f32> = Vec::new();
+        for img in images {
+            let feats = self.encode_image(img, hidden)?;
+            img_feats.extend_from_slice(&feats);
+        }
+
+        // 4) injection des features aux positions <|image_pad|>
         let mut k = 0usize;
         for (t, &id) in ids.iter().enumerate() {
             if id == self.pad_id {
@@ -195,7 +222,7 @@ impl VlmBackend for QwenOnnx {
         }
         anyhow::ensure!(k * hidden == img_feats.len(), "features visuelles non toutes placées ({k})");
 
-        // 4) décodeur : cache vide, une passe, logits du dernier token
+        // 5) décodeur : cache vide, une passe, logits du dernier token
         let pos = rope_positions(&ids, self.pad_id, &grids, self.time_scale);
         let mut inputs: Vec<(String, ort::session::SessionInputValue<'_>)> = vec![   // [ORT] entrées dynamiques
             ("inputs_embeds".into(), Tensor::from_array(([1usize, s, hidden], embeds.into_boxed_slice()))?.into_dyn().into()),
