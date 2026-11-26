@@ -81,7 +81,7 @@ fn patchify(img: &Mat, min_pixels: i32, max_pixels: i32) -> anyhow::Result<(Vec<
 
 /// Positions (3,S) = port du get_rope_index du script officiel. grids = (gh, gw) AVANT fusion 2x2 de chaque image.
 /// `time_scale` = tokens_per_second (config.vision_config.tokens_per_second) x second_per_grid (1 dans le script).
-fn rope_positions(ids: &[i64], image_pad: i64, grids: &[(usize, usize)], time_scale: i64) -> Vec<i64> {
+fn rope_positions(ids: &[i64], image_pad: i64, grids: &[(usize, usize)], _time_scale: i64) -> Vec<i64> {
     let s = ids.len();
     let (mut pos, mut cur, mut i, mut g) = (vec![0i64; 3 * s], 0i64, 0usize, 0usize);
     while i < s {
@@ -89,7 +89,9 @@ fn rope_positions(ids: &[i64], image_pad: i64, grids: &[(usize, usize)], time_sc
             let (lh, lw) = (grids[g].0 / MERGE, grids[g].1 / MERGE); g += 1;
             for r in 0..lh { for c in 0..lw {
                 let k = i + r * lw + c;
-                pos[k] = cur * time_scale;          // temporel
+                pos[k] = cur;                       // temporel : pour une IMAGE = position de départ, sans facteur
+                                                    // (transformers : time_interval = 1 pour les images, fix #45325 ;
+                                                    //  le script d'exemple onnx-community multipliait à tort par tokens_per_second)
                 pos[s + k] = cur + r as i64;        // hauteur
                 pos[2 * s + k] = cur + c as i64;    // largeur
             }}
@@ -208,8 +210,8 @@ impl QwenOnnx {
         }
         let pad_id = tok.token_to_id("<|image_pad|>").ok_or_else(|| anyhow::anyhow!("<|image_pad|> absent"))? as i64;
         let visual = setup_model_avec_cache(&visual_path, device)?;
-        // embed_tokens = simple table de correspondance (~1,2 Go en fp32) (possible sur CPU pour libérer la VRAM)
-        let embed = setup_model_avec_cache(&embed_path, device)?;
+        // embed_tokens = simple table de correspondance (~1,2 Go en fp32) : aussi rapide sur CPU, libère la VRAM
+        let embed = setup_model_avec_cache(&embed_path, "cpu")?;
         let decoder = setup_model_avec_cache(&decoder_path, device)?;
         // [ORT] entrées du décodeur dont le nom commence par "past_key_values" + leur type (fp16 ou fp32)
         let past = decoder.inputs().iter().filter(|i| i.name().starts_with("past_key_values"))

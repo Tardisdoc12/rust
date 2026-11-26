@@ -18,8 +18,8 @@ use crate::models::{
     tiled_yolo_26::{TiledYOLO26, TiledConfig},
     sam2::Sam2Processor,
     qwen_onnx::QwenOnnx,
-    vlm::Vlm,
-    identifier::{Gate, Identifier, Route},
+    vlm::{Vlm, OOB},
+    identifier::{Decision, Gate, Identifier, Route},
     florence::Florence,
 };
 use crate::detections::{mask::Mask, detection_class::DetectionClass, detections::Detection};
@@ -221,6 +221,8 @@ impl PyDetectionPipeline {
                 DetectionClass::Produit => {
                     if let Err(e) = self.classify_produit(detection) {
                         eprintln!("[produit] classification échouée : {e}");
+                        detection.label = "OOB".to_string();      // jamais de "Product" en base
+                        detection.score = 0.0;
                     }
                     self.resolver.resolve(detection);
                 }
@@ -282,20 +284,61 @@ impl PyDetectionPipeline {
                 detection.label = "OOB".to_string();
                 detection.score = 1.0 - sim;
             },
-            Route::Ask { cands, sim, margin } => {
+            Route::Ask { cands, sims, sim, margin } => {
                 let r = self.vlm.lock().unwrap().process_product(&detection.mask.mat, &cands)?;
-                match &r.ean {
-                    Some(ean) => {
-                        detection.label = ean.clone();
-                        detection.score = r.conf;
-                        println!("VLM : {ean} (conf {:.2}, ordres d'accord {}) [sim {sim:.3}, écart {margin:.3}]", r.conf, r.agree);
-                    },
-                    None => {
-                        detection.label = "OOB".to_string();
-                        detection.score = 1.0 - r.conf;
-                        println!("VLM : aucun des candidats (OOB {:.2})", r.conf);
-                    },
+                let d = Decision::default();
+                let agree_ok = r.agree || !d.require_agree || r.n_ok < 2;
+
+                // 1) VLM confiant et cohérent : on le suit (comme en Python)
+                if r.conf >= d.min_conf && agree_ok {
+                    match &r.ean {
+                        Some(ean) => {
+                            detection.label = ean.clone();
+                            detection.score = r.conf;
+                            println!("VLM : {ean} (conf {:.2}, ordres d'accord {}) [sim {sim:.3}, écart {margin:.3}]", r.conf, r.agree);
+                        }
+                        None => {
+                            detection.label = "OOB".to_string();
+                            detection.score = r.conf;
+                            println!("VLM : aucun des candidats (OOB {:.2})", r.conf);
+                        }
+                    }
+                    return Ok(());
                 }
+
+                let why = if !agree_ok { "VLM incohérent entre ordres".to_string() } else { format!("VLM peu confiant ({:.2})", r.conf) };
+
+                // 2) VLM hésitant, pas de fusion : on garde l'embedding top-1
+                if d.fuse_w <= 0.0 {
+                    detection.label = cands[0].ean.clone();
+                    detection.score = sim;
+                    println!("VLM incertain ({why}) : embedding conservé {} [sim {sim:.3}]", detection.label);
+                    return Ok(());
+                }
+
+                // 3) fusion VLM x embedding : score(c) = P_vlm(c) * exp(w * (sim(c) - sim_top1) / T)
+                let mut fused: Vec<(String, f32)> = cands.iter().zip(&sims).map(|(c, &s)| {
+                    let p = r.probs.get(&c.ean).copied().unwrap_or(0.0);
+                    (c.ean.clone(), p * (d.fuse_w * (s - sim) / d.fuse_t).exp())
+                }).collect();
+                if let Some(&p_oob) = r.probs.get(OOB) {
+                    let prior = match d.oob_sim {
+                        Some(o) => (d.fuse_w * (o - sim) / d.fuse_t).exp(),
+                        None => d.none_prior,
+                    };
+                    fused.push((OOB.to_string(), p_oob * prior));
+                }
+                let tot = fused.iter().map(|x| x.1).sum::<f32>();
+                if !(tot > 0.0 && tot.is_finite()) {            // dégénéré : on garde l'embedding
+                    detection.label = cands[0].ean.clone();
+                    detection.score = sim;
+                    return Ok(());
+                }
+                let (w, p) = fused.iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|(k, v)| (k.clone(), v / tot)).unwrap();
+                detection.label = w.clone();
+                detection.score = p;
+                println!("VLM fusion : {w} ({p:.2}) [{why} ; sim {sim:.3}, écart {margin:.3}] {}",
+                    fused.iter().map(|(k, v)| format!("{k}: {:.2}", v / tot)).collect::<Vec<_>>().join(", "));
             }
         }
         Ok(())
