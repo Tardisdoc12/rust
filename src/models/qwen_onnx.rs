@@ -5,6 +5,7 @@
 //--------------------------------------------------------------------------------------------------
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use opencv::{core::{Mat, Size, CV_32F}, imgproc, prelude::*};
 use ort::{session::{RunOptions, Session}, value::Tensor};
 use tokenizers::Tokenizer;
@@ -18,6 +19,8 @@ const FACTOR: i32 = 28;           // patch 14 x merge 2
 const P: usize = 14;
 const MERGE: usize = 2;
 const PATCH_DIM: usize = 3 * 2 * P * P;   // 1176 = canaux x temporel x 14 x 14
+/// Nombre max d'images dont on garde les features visuelles en cache (~2 Mo chacune à 256 tokens x 2048).
+const FEAT_CACHE_MAX: usize = 256;
 const MEAN: [f32; 3] = [0.48145466, 0.4578275, 0.40821073];
 const STD: [f32; 3] = [0.26862954, 0.26130258, 0.27577711];
 
@@ -109,6 +112,23 @@ fn shrink_opts() -> anyhow::Result<RunOptions<ort::session::NoSelectedOutputs>> 
     Ok(opts)
 }
 
+/// Empreinte du contenu d'une image (taille + type + pixels). Deux Mat identiques pixel à pixel
+/// ont la même clé, même si ce sont des objets différents (fit_max_side recrée la Mat à chaque appel).
+fn image_key(img: &Mat) -> anyhow::Result<u64> {
+    let owned;
+    let m = if img.is_continuous() { img } else { owned = img.try_clone()?; &owned };
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (m.rows(), m.cols(), m.typ()).hash(&mut h);
+    m.data_bytes()?.hash(&mut h);
+    Ok(h.finish())
+}
+
+/// Grille de patches (gh, gw) qu'aura l'image après smart_resize, sans faire le patchify.
+fn grid_of(img: &Mat, min_pixels: i32, max_pixels: i32) -> (usize, usize) {
+    let (h, w) = smart_resize(img.rows(), img.cols(), min_pixels, max_pixels);
+    (h as usize / P, w as usize / P)
+}
+
 //--------------------------------------------------------------------------------------------------
 
 struct Past { name: String, f16: bool }
@@ -124,6 +144,10 @@ pub struct QwenOnnx {
     past: Vec<Past>,
     kv_heads: usize, head_dim: usize, time_scale: i64,
     pub min_pixels: i32, pub max_pixels: i32,
+    /// Cache des features visuelles par contenu d'image. Les photos de référence des candidats reviennent
+    /// à chaque permutation et d'un produit à l'autre : on ne les encode qu'une fois. Résultat identique
+    /// (l'encodeur traite chaque image indépendamment), seul le temps change.
+    feat_cache: HashMap<u64, Vec<f32>>,
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -142,7 +166,7 @@ impl QwenOnnx {
         }
         let pad_id = tok.token_to_id("<|image_pad|>").ok_or_else(|| anyhow::anyhow!("<|image_pad|> absent"))? as i64;
         let visual = setup_model_avec_cache(&visual_path, device)?;
-        // embed_tokens = simple table de correspondance (~1,2 Go en fp32) : aussi rapide sur CPU, libère la VRAM
+        // embed_tokens = simple table de correspondance (~1,2 Go en fp32) (possible sur CPU pour libérer la VRAM)
         let embed = setup_model_avec_cache(&embed_path, device)?;
         let decoder = setup_model_avec_cache(&decoder_path, device)?;
         // [ORT] entrées du décodeur dont le nom commence par "past_key_values" + leur type (fp16 ou fp32)
@@ -151,7 +175,8 @@ impl QwenOnnx {
             .collect::<Vec<_>>();
         anyhow::ensure!(!past.is_empty(), "aucune entrée past_key_values : ce n'est pas le décodeur 'merged' attendu");
         Ok(Self { visual, embed, decoder, tok, letter_ids, pad_id, past, kv_heads, head_dim,
-                  time_scale: tokens_per_second, min_pixels: 56 * 56, max_pixels: 28 * 28 * 256 })   // 256 tokens max / image (avant : 768)
+                  time_scale: tokens_per_second, min_pixels: 56 * 56, max_pixels: 28 * 28 * 256,
+                  feat_cache: HashMap::new() })   // 256 tokens max / image (avant : 768)
     }
 
     /// Encodeur visuel sur UNE image : retourne ses features ((gh/2)*(gw/2) x hidden, aplaties).
@@ -185,22 +210,21 @@ impl VlmBackend for QwenOnnx {
     fn letter_ids(&self) -> &HashMap<char, Vec<u32>> { &self.letter_ids }
 
     fn first_token_logits(&mut self, prompt: &Prompt) -> anyhow::Result<Vec<f32>> {
-        // 1) images -> patches (gardées image par image) ; texte = chat template Qwen2.5-VL
-        //    (les morceaux sont concaténés SANS séparateur, comme le template HF ;
-        //    une image devient <|vision_start|><|image_pad|>*n<|vision_end|>)
-        let mut images: Vec<ImagePatches> = Vec::new();
+        // 1) texte = chat template Qwen2.5-VL (les morceaux sont concaténés SANS séparateur, comme le template HF ;
+        //    une image devient <|vision_start|><|image_pad|>*n<|vision_end|>). La grille est calculée sans patchify.
+        let mut order: Vec<usize> = Vec::new();          // indices dans prompt.images, dans l'ordre des <|image_pad|>
         let mut grids = Vec::new();
         let mut text = String::from("<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n");
         for part in &prompt.parts {
             match part {
                 Part::Text(t) => text.push_str(t),
                 Part::Image(i) => {
-                    let (p, gh, gw) = patchify(prompt.images[*i], self.min_pixels, self.max_pixels)?;
+                    let (gh, gw) = grid_of(prompt.images[*i], self.min_pixels, self.max_pixels);
                     grids.push((gh, gw));
+                    order.push(*i);
                     text.push_str("<|vision_start|>");
                     for _ in 0..(gh / MERGE) * (gw / MERGE) { text.push_str("<|image_pad|>"); }
                     text.push_str("<|vision_end|>");
-                    images.push(ImagePatches { patches: p, gh, gw });   // même ordre que les <|image_pad|>
                 }
             }
         }
@@ -217,11 +241,21 @@ impl VlmBackend for QwenOnnx {
         drop(emb);
         anyhow::ensure!(embeds.len() == s * hidden, "dimension cachée incohérente");
 
-        // 3) encodeur visuel : UNE image par appel, features concaténées dans l'ordre du prompt
+        // 3) encodeur visuel : UNE image par appel, et seulement si elle n'est pas déjà en cache
         let mut img_feats: Vec<f32> = Vec::new();
-        for img in images {
-            let feats = self.encode_image(img, hidden)?;
+        for (&i, &(gh, gw)) in order.iter().zip(&grids) {
+            let img = prompt.images[i];
+            let key = image_key(img)?;
+            if let Some(f) = self.feat_cache.get(&key) {
+                img_feats.extend_from_slice(f);
+                continue;
+            }
+            let (p, pgh, pgw) = patchify(img, self.min_pixels, self.max_pixels)?;
+            anyhow::ensure!((pgh, pgw) == (gh, gw), "grille incohérente entre grid_of et patchify");
+            let feats = self.encode_image(ImagePatches { patches: p, gh, gw }, hidden)?;
             img_feats.extend_from_slice(&feats);
+            if self.feat_cache.len() >= FEAT_CACHE_MAX { self.feat_cache.clear(); }   // purge simple
+            self.feat_cache.insert(key, feats);
         }
 
         // 4) injection des features aux positions <|image_pad|>
