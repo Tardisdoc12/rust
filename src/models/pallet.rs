@@ -3,7 +3,6 @@
 // Author: Jean Anquetil
 // Date: Saturday 28/11/2026
 //--------------------------------------------------------------------------------------------------
-
 //! Palette = UN SEUL produit. On ne décide donc pas détection par détection : on pool les preuves de toutes les
 //! détections et on prend UNE décision pour la palette entière, appliquée à toutes.
 //!
@@ -55,10 +54,20 @@ impl Default for PalletParams {
 pub enum Verdict {
     /// l'EAN `code` (index de la base) pour toute la palette ; `score` = S(code)
     Accept { code: usize, score: f32 },
-    /// produit absent de la base ; `score` = S(e*) (la similarité la plus haute de la palette)
-    Reject { score: f32 },
-    /// à arbitrer ; `codes` = candidats triés par S décroissant ; `score` = S(codes[0])
-    Ambiguous { codes: Vec<usize>, score: f32 },
+    /// produit absent de la base ; `score` = S(e*) (la similarité la plus haute de la palette), `code` = cet EAN
+    Reject { code: usize, score: f32 },
+    /// à arbitrer ; `codes` = candidats triés par S décroissant, `scores[i]` = S(codes[i]) ; `score` = scores[0]
+    Ambiguous { codes: Vec<usize>, scores: Vec<f32>, score: f32 },
+}
+
+impl Verdict {
+    /// EAN le plus proche de la palette (sert à choisir la détection représentante)
+    pub fn top_code(&self) -> usize {
+        match self {
+            Verdict::Accept { code, .. } | Verdict::Reject { code, .. } => *code,
+            Verdict::Ambiguous { codes, .. } => codes[0],
+        }
+    }
 }
 
 /// S(e) pour tous les EAN. `bests[d][e]` = meilleure similarité de la détection d avec l'EAN e (même longueur partout).
@@ -91,13 +100,47 @@ pub fn decide(bests: &[Vec<f32>], p: &PalletParams) -> Option<Verdict> {
     let gap = order.get(1).map(|&c| s1 - s[c]).unwrap_or(f32::INFINITY);
 
     if p.reject_sim.map_or(false, |t| s1 < t) {
-        return Some(Verdict::Reject { score: s1 });
+        return Some(Verdict::Reject { code: top, score: s1 });
     }
     if p.accept_sim.map_or(false, |t| s1 >= t) && gap >= p.margin {
         return Some(Verdict::Accept { code: top, score: s1 });
     }
     let k = p.vlm_candidates.max(1);
-    Some(Verdict::Ambiguous { codes: order.into_iter().take(k).collect(), score: s1 })
+    let codes: Vec<usize> = order.into_iter().take(k).collect();
+    let scores: Vec<f32> = codes.iter().map(|&c| s[c]).collect();
+    Some(Verdict::Ambiguous { codes, scores, score: s1 })
+}
+
+/// Paramètres de la fusion (ceux de `Decision` : fuse_w, fuse_t, oob_sim, none_prior).
+#[derive(Debug, Clone, Copy)]
+pub struct Fusion {
+    pub w: f32,
+    pub t: f32,
+    pub oob_sim: Option<f32>,
+    pub none_prior: f32,
+}
+
+/// Fusion VLM x embeddings quand le VLM hésite : score(c) = P_vlm(c) * exp(w * (S(c) - S_top) / t),
+/// et pour « inconnu » : P_vlm(OOB) * exp(w * (oob_sim - S_top) / t), ou none_prior si oob_sim = None.
+/// `cands` = (EAN, S de la palette). Renvoie (label, probabilité), ou None si le calcul est dégénéré.
+pub fn fuse(probs: &std::collections::HashMap<String, f32>, cands: &[(String, f32)], oob_key: &str, f: &Fusion) -> Option<(String, f32)> {
+    let s_top = cands.iter().map(|c| c.1).fold(f32::NEG_INFINITY, f32::max);
+    let mut fused: Vec<(String, f32)> = cands.iter().map(|(ean, s)| {
+        let p = probs.get(ean).copied().unwrap_or(0.0);
+        (ean.clone(), p * (f.w * (s - s_top) / f.t).exp())
+    }).collect();
+    if let Some(&p_oob) = probs.get(oob_key) {
+        let prior = match f.oob_sim {
+            Some(o) => (f.w * (o - s_top) / f.t).exp(),
+            None => f.none_prior,
+        };
+        fused.push((oob_key.to_string(), p_oob * prior));
+    }
+    let tot: f32 = fused.iter().map(|x| x.1).sum();
+    if !(tot > 0.0 && tot.is_finite()) {
+        return None;
+    }
+    fused.iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|(k, v)| (k.clone(), v / tot))
 }
 
 /// Indice (dans `bests`) de la détection la plus proche de l'EAN `code` : c'est elle qu'on montre au VLM.
@@ -130,7 +173,7 @@ mod tests {
         // chiffres d'illustration : 1 détection à 0.75 avec A (erreur), 3 autres ~0.35
         let b = vec![vec![0.75, 0.30, 0.20], vec![0.35, 0.33, 0.20], vec![0.36, 0.30, 0.22], vec![0.34, 0.31, 0.21]];
         match decide(&b, &params()) {
-            Some(Verdict::Reject { score }) => assert!((score - 0.45).abs() < 1e-5, "{score}"),
+            Some(Verdict::Reject { code: 0, score }) => assert!((score - 0.45).abs() < 1e-5, "{score}"),
             v => panic!("{v:?}"),
         }
     }
@@ -195,6 +238,37 @@ mod tests {
         let (w, h) = median_size(&s).unwrap();
         assert!((w - 10.3).abs() < 1e-5 && (h - 20.1).abs() < 1e-5, "{w} {h}");
         assert_eq!(median_size(&[(0.0, 0.0)]), None);
+    }
+
+    fn probs(v: &[(&str, f32)]) -> std::collections::HashMap<String, f32> {
+        v.iter().map(|(k, p)| (k.to_string(), *p)).collect()
+    }
+    const FUSION: Fusion = Fusion { w: 1.0, t: 0.02, oob_sim: Some(0.8), none_prior: 1.0 };
+
+    #[test]
+    fn fusion_penche_vers_oob_quand_la_palette_est_peu_similaire() {
+        // cas du log : S = 0.552 (< oob_sim 0.8), VLM hésitant => on ne force pas un EAN faible
+        let cands = vec![("A".to_string(), 0.552), ("B".to_string(), 0.50)];
+        let (l, _) = fuse(&probs(&[("A", 0.4), ("B", 0.3), ("OOB", 0.3)]), &cands, "OOB", &FUSION).unwrap();
+        assert_eq!(l, "OOB");
+    }
+    #[test]
+    fn fusion_garde_lean_si_similarite_tres_haute() {
+        let cands = vec![("A".to_string(), 0.90), ("B".to_string(), 0.60)];
+        let (l, p) = fuse(&probs(&[("A", 0.4), ("B", 0.3), ("OOB", 0.3)]), &cands, "OOB", &FUSION).unwrap();
+        assert_eq!(l, "A");
+        assert!(p > 0.9, "{p}");
+    }
+    #[test]
+    fn fusion_les_embeddings_departagent_un_vlm_indecis() {
+        let cands = vec![("A".to_string(), 0.70), ("B".to_string(), 0.60)];
+        let f = Fusion { oob_sim: None, ..FUSION };
+        let (l, _) = fuse(&probs(&[("A", 0.5), ("B", 0.5)]), &cands, "OOB", &f).unwrap();
+        assert_eq!(l, "A");
+    }
+    #[test]
+    fn fusion_degeneree() {
+        assert!(fuse(&probs(&[]), &[("A".to_string(), 0.7)], "OOB", &FUSION).is_none());
     }
 
     #[test]

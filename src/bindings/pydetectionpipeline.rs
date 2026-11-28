@@ -156,7 +156,7 @@ impl PyDetectionPipeline {
         let _ = self.florence.lock().map(|mut f| f.unload());
     }
 
-    #[pyo3(signature = (image, is_pallet=false))]
+#[pyo3(signature = (image, is_pallet=false))]
     fn process(&self, image: PyReadonlyArray3<'_, u8>, is_pallet: bool) -> PyResult<Vec<Detection>> {
         let mut image_rust = Mask::new();
         image_rust.setup_from_python(image)?;
@@ -176,6 +176,7 @@ impl PyDetectionPipeline {
             && vec_detections.iter().filter(|d| matches!(d.categorie, DetectionClass::Produit)).count() >= 2;
         let mut pallet_owners: Vec<usize> = Vec::new();    // indice de la détection dans vec_detections
         let mut pallet_bests: Vec<Vec<f32>> = Vec::new();  // sa meilleure similarité avec chaque EAN
+        let mut pallet_rep: Option<usize> = None;          // la seule détection « produit » gardée à la fin
 
         for (i, detection) in vec_detections.iter_mut().enumerate() {
             match detection.categorie {
@@ -264,12 +265,15 @@ impl PyDetectionPipeline {
                     self.classify_produit_or_oob(d);
                 }
             } else {
-                self.resolve_pallet(&mut vec_detections, &pallet_owners, &pallet_bests);
+                pallet_rep = self.resolve_pallet(&mut vec_detections, &pallet_owners, &pallet_bests);
             }
         }
 
         for (idx, price) in assignments {
             vec_detections[idx].price = price;
+        }
+        if let Some(rep) = pallet_rep {
+            self.keep_single_product(&mut vec_detections, rep);
         }
         if number_etiquette >= 2{
             set_all_position(&mut vec_detections);
@@ -385,83 +389,117 @@ impl PyDetectionPipeline {
         id.infer(&x)
     }
 
-    /// Palette = un seul produit : une décision pour toutes les détections `Produit`
-    /// (label, score et taille identiques). Voir pallet.rs pour la règle.
-    fn resolve_pallet(&self, dets: &mut [Detection], owners: &[usize], bests: &[Vec<f32>]) {
-        use crate::models::pallet::{decide, median_size, Verdict};
+    /// Palette = UN SEUL produit : une décision pour toutes les détections `Produit` (voir pallet.rs). Seule la
+    /// détection la plus représentative reçoit le résultat (label, score, taille médiane) ; `keep_single_product`
+    /// supprimera les autres. Renvoie l'indice de cette détection (None : rien décidé, classement un par un).
+    fn resolve_pallet(&self, dets: &mut [Detection], owners: &[usize], bests: &[Vec<f32>]) -> Option<usize> {
+        use crate::models::pallet::{best_crop, decide, fuse, median_size, Fusion, Verdict};
         let params = &self.config.pallet;
         let Some(verdict) = decide(bests, params) else {
             eprintln!("[palette] similarités incohérentes : classement détection par détection");
             for d in dets.iter_mut().filter(|d| matches!(d.categorie, DetectionClass::Produit)) {
                 self.classify_produit_or_oob(d);
             }
-            return;
+            return None;
         };
+        // détection représentante : celle qui ressemble le plus au meilleur EAN de la palette
+        let rep = owners[best_crop(bests, verdict.top_code())];
+        let n = bests.len();
+
         let (label, score) = match verdict {
             Verdict::Accept { code, score } => {
                 let ean = self.identifier.lock().unwrap().ean(code).to_string();
-                println!("[palette] {} détections -> {ean} (S = {score:.3}, sans VLM)", bests.len());
+                println!("[palette] {n} produits -> {ean} (S = {score:.3}, sans VLM)");
                 (ean, score)
             }
-            Verdict::Reject { score } => {
-                println!("[palette] {} détections -> OOB (S max = {score:.3}, sans VLM)", bests.len());
+            Verdict::Reject { score, .. } => {
+                println!("[palette] {n} produits -> OOB (S max = {score:.3}, sans VLM)");
                 (OOB.to_string(), 1.0 - score)
             }
-            Verdict::Ambiguous { codes, score } => match self.arbitrate_pallet(dets, owners, bests, &codes) {
-                Ok(Some((label, conf))) => {
-                    println!("[palette] {} détections -> {label} (VLM, conf {conf:.2}, S = {score:.3})", bests.len());
-                    (label, conf)
-                }
-                other => {
-                    if let Err(e) = other {
+            Verdict::Ambiguous { codes, scores, score } => {
+                let d = Decision::default();
+                let eans: Vec<String> = {
+                    let id = self.identifier.lock().unwrap();
+                    codes.iter().map(|&c| id.ean(c).to_string()).collect()
+                };
+                // repli sans VLM exploitable : même idée qu'oob_sim ; un top-1 trop peu similaire n'est PAS accepté
+                let repli = |s: f32| -> (String, f32) {
+                    if d.oob_sim.map_or(true, |o| s >= o) { (eans[0].clone(), s) } else { (OOB.to_string(), 1.0 - s) }
+                };
+                match self.arbitrate_pallet(&dets[rep], &codes) {
+                    Ok(Some(r)) => {
+                        println!("[palette] VLM : {:?} (conf {:.2}, ordres d'accord {}, n_ok {}) [S = {score:.3}]",
+                                 r.ean, r.conf, r.agree, r.n_ok);
+                        let agree_ok = r.agree || !d.require_agree || r.n_ok < 2;
+                        if r.conf >= d.min_conf && agree_ok {
+                            (r.ean.clone().unwrap_or_else(|| OOB.to_string()), r.conf)
+                        } else if d.fuse_w > 0.0 {
+                            let cands: Vec<(String, f32)> = eans.iter().cloned().zip(scores.iter().copied()).collect();
+                            let f = Fusion { w: d.fuse_w, t: d.fuse_t, oob_sim: d.oob_sim, none_prior: d.none_prior };
+                            match fuse(&r.probs, &cands, OOB, &f) {
+                                Some((l, p)) => {
+                                    println!("[palette] VLM incertain : fusion VLM x embeddings -> {l} ({p:.2})");
+                                    (l, p)
+                                }
+                                None => repli(score),
+                            }
+                        } else {
+                            repli(score)
+                        }
+                    }
+                    Ok(None) => repli(score),                              // VLM désactivé
+                    Err(e) => {
                         eprintln!("[palette] arbitrage VLM impossible : {e:#}");
-                    }
-                    // VLM absent ou hésitant : on suit les embeddings poolés (top-1 de la palette), sauf sous reject_sim
-                    if params.reject_sim.map_or(true, |t| score >= t) {
-                        let ean = self.identifier.lock().unwrap().ean(codes[0]).to_string();
-                        println!("[palette] ambigu, repli embeddings : {ean} (S = {score:.3})");
-                        (ean, score)
-                    } else {
-                        println!("[palette] ambigu, repli embeddings : OOB (S = {score:.3})");
-                        (OOB.to_string(), 1.0 - score)
+                        repli(score)
                     }
                 }
-            },
+            }
         };
 
         let prod: Vec<usize> = dets.iter().enumerate()
             .filter(|(_, d)| matches!(d.categorie, DetectionClass::Produit)).map(|(i, _)| i).collect();
         let size = median_size(&prod.iter().map(|&i| (dets[i].width_cm, dets[i].height_cm)).collect::<Vec<_>>());
-        for &i in &prod {
-            let d = &mut dets[i];
-            d.label = label.clone();
-            d.score = score;
-            if let Some((w, h)) = size {
-                d.set_size(w, h);
-            }
-            self.resolver.resolve(d);
+        println!("[palette] résultat : {label} (score {score:.2}) sur {n} produits");
+        let d = &mut dets[rep];
+        d.label = label;
+        d.score = score;
+        if let Some((w, h)) = size {
+            d.set_size(w, h);
         }
+        self.resolver.resolve(d);                                          // une seule fois (pas une par détection)
+        Some(rep)
     }
 
-    /// Cas ambigu : UN appel VLM, sur la détection la plus proche du meilleur candidat, contre les meilleurs EAN de la
-    /// palette. Renvoie None si le VLM est désactivé ou pas assez sûr.
-    fn arbitrate_pallet(&self, dets: &[Detection], owners: &[usize], bests: &[Vec<f32>], codes: &[usize])
-        -> anyhow::Result<Option<(String, f32)>> {
-        use crate::models::pallet::best_crop;
+    /// On ne garde qu'UNE détection `Produit` (la représentante) ; les autres catégories sont conservées.
+    /// Le prix posé sur un autre produit de la palette (étiquette la plus proche) est reporté sur la représentante.
+    fn keep_single_product(&self, dets: &mut Vec<Detection>, rep: usize) {
+        let price = dets.iter().enumerate()
+            .filter(|(i, d)| *i != rep && matches!(d.categorie, DetectionClass::Produit))
+            .map(|(_, d)| d.price).find(|p| *p > 0.0);
+        if let Some(p) = price {
+            if dets[rep].price <= 0.0 {
+                dets[rep].price = p;
+            }
+        }
+        let mut k = 0usize;
+        dets.retain(|d| {
+            let keep = k == rep || !matches!(d.categorie, DetectionClass::Produit);
+            k += 1;
+            keep
+        });
+    }
+
+    /// Cas ambigu : UN appel VLM, sur la détection représentante, contre les meilleurs EAN de la palette.
+    /// None si le VLM est désactivé (`use_vlm = false`).
+    fn arbitrate_pallet(&self, det: &Detection, codes: &[usize]) -> anyhow::Result<Option<crate::models::vlm::VlmResult>> {
         if !self.config.pallet.use_vlm || codes.is_empty() {
             return Ok(None);
         }
-        let det = &dets[owners[best_crop(bests, codes[0])]];
         let cands = self.identifier.lock().map_err(|_| anyhow::anyhow!("Mutex Identifier empoisonné"))?
             .cands_for_crop(&det.mask.mat, codes, self.number_photos_candidates_for_vlm)?;
         let r = self.vlm.lock().map_err(|_| anyhow::anyhow!("Mutex VLM empoisonné"))?
             .process_product(&det.mask.mat, &cands)?;
-        let d = Decision::default();
-        let agree_ok = r.agree || !d.require_agree || r.n_ok < 2;
-        if r.conf >= d.min_conf && agree_ok {
-            return Ok(Some((r.ean.unwrap_or_else(|| OOB.to_string()), r.conf)));
-        }
-        Ok(None)
+        Ok(Some(r))
     }
 
     fn classify_etiquette(&self, detection: &mut Detection) -> anyhow::Result<()> {
