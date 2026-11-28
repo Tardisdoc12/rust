@@ -66,6 +66,9 @@ pub struct Config {
     pub perms: usize,
     #[serde(default = "early_conf_par_defaut")]
     pub early_conf: f32,
+
+    #[serde(default)]
+    pub pallet: crate::models::pallet::PalletParams
 }
 
 //--------------------------------------------------------------------------------------------------
