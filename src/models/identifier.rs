@@ -166,6 +166,21 @@ impl Identifier {
         Ok(Route::Ask { cands: self.load_cands(&sims, &cs, n_refs)?, sims: cand_sims, sim, margin })
     }
 
+    /// EAN de l'index `code` (les vecteurs renvoyés par `infer` sont indexés par ce code).
+    pub fn ean(&self, code: usize) -> &str {
+        &self.db.eans[code]
+    }
+
+    /// Candidats VLM pour les EAN `codes` (photos de référence choisies d'après CE crop) : sert à la palette,
+    /// où l'on n'appelle le VLM qu'une fois, sur la meilleure détection.
+    pub fn cands_for_crop(&mut self, image: &Mat, codes: &[usize], n_refs: usize) -> anyhow::Result<Vec<VlmCandidate>> {
+        let x = self.preprocess(image)?;
+        let q = self.embedder.infer(&x)?;
+        let q = self.embedder.postprocess(&q)?;
+        let (sims, _, _) = self.db.rank(&q);
+        self.load_cands(&sims, codes, n_refs)
+    }
+
     /// Pratique : image -> k candidats.
     pub fn identify(&mut self, image: &Mat) -> anyhow::Result<Vec<Candidate>> {
         let x = self.preprocess(image)?;

@@ -156,9 +156,8 @@ impl PyDetectionPipeline {
         let _ = self.florence.lock().map(|mut f| f.unload());
     }
 
-    /// Traite une image. Les modèles déjà chargés sont réutilisés — appelez
-    /// cette méthode autant de fois que nécessaire sur le même objet.
-    fn process(&self, image: PyReadonlyArray3<'_, u8>) -> PyResult<Vec<Detection>> {
+    #[pyo3(signature = (image, is_pallet=false))]
+    fn process(&self, image: PyReadonlyArray3<'_, u8>, is_pallet: bool) -> PyResult<Vec<Detection>> {
         let mut image_rust = Mask::new();
         image_rust.setup_from_python(image)?;
        
@@ -171,6 +170,12 @@ impl PyDetectionPipeline {
         let mut objects: Vec<(usize, (f32, f32))> = Vec::new();
         let mut number_etiquette: i8 = 0;
         let mut has_ref : bool = false;
+        // Palette (UN SEUL produit) : avec au moins 2 produits, on ne les classe pas un par un. On pool leurs embeddings
+        // et on décide une seule fois pour toute la palette. Un seul produit : comportement normal.
+        let pallet_mode = is_pallet
+            && vec_detections.iter().filter(|d| matches!(d.categorie, DetectionClass::Produit)).count() >= 2;
+        let mut pallet_owners: Vec<usize> = Vec::new();    // indice de la détection dans vec_detections
+        let mut pallet_bests: Vec<Vec<f32>> = Vec::new();  // sa meilleure similarité avec chaque EAN
 
         for (i, detection) in vec_detections.iter_mut().enumerate() {
             match detection.categorie {
@@ -216,15 +221,18 @@ impl PyDetectionPipeline {
         }
 
         let mut assignments: Vec<(usize, f32)> = Vec::new();
-        for detection in vec_detections.iter_mut() {
+        for (det_i, detection) in vec_detections.iter_mut().enumerate() {
             match detection.categorie {
                 DetectionClass::Produit => {
-                    if let Err(e) = self.classify_produit(detection) {
-                        eprintln!("[produit] classification échouée : {e}");
-                        detection.label = "OOB".to_string();      // jamais de "Product" en base
-                        detection.score = 0.0;
+                    if pallet_mode {
+                        // palette : on garde seulement les similarités ; la décision vient après la boucle
+                        match self.embed_best(detection) {
+                            Ok(b) => { pallet_owners.push(det_i); pallet_bests.push(b); }
+                            Err(e) => eprintln!("[palette] embedding impossible : {e:#}"),
+                        }
+                    } else {
+                        self.classify_produit_or_oob(detection);
                     }
-                    self.resolver.resolve(detection);
                 }
                 DetectionClass::Etiquette => {
                     if let Err(e) = self.classify_etiquette(detection) {
@@ -246,6 +254,17 @@ impl PyDetectionPipeline {
                     }
                 }
                 _ => {}
+            }
+        }
+
+        if pallet_mode {
+            if pallet_bests.is_empty() {
+                // aucun embedding exploitable : on retombe sur la classification détection par détection
+                for d in vec_detections.iter_mut().filter(|d| matches!(d.categorie, DetectionClass::Produit)) {
+                    self.classify_produit_or_oob(d);
+                }
+            } else {
+                self.resolve_pallet(&mut vec_detections, &pallet_owners, &pallet_bests);
             }
         }
 
@@ -342,6 +361,107 @@ impl PyDetectionPipeline {
             }
         }
         Ok(())
+    }
+
+    /// Classification détection par détection, avec repli OOB (jamais de "Product" en base).
+    fn classify_produit_or_oob(&self, detection: &mut Detection) {
+        if let Err(e) = self.classify_produit(detection) {
+            eprintln!("[produit] classification échouée : {e}");
+            detection.label = "OOB".to_string();
+            detection.score = 0.0;
+        }
+        self.resolver.resolve(detection);
+    }
+
+    /// Palette : meilleure similarité du crop avec chaque EAN de la base (index = code EAN de Db).
+    fn embed_best(&self, detection: &Detection) -> anyhow::Result<Vec<f32>> {
+        use crate::models::model_core::ModelPipeline;
+        let m = &detection.mask.mat;
+        if m.empty() {
+            anyhow::bail!("crop vide ({}x{})", m.cols(), m.rows());
+        }
+        let mut id = self.identifier.lock().map_err(|_| anyhow::anyhow!("Mutex Identifier empoisonné"))?;
+        let x = id.preprocess(m)?;
+        id.infer(&x)
+    }
+
+    /// Palette = un seul produit : une décision pour toutes les détections `Produit`
+    /// (label, score et taille identiques). Voir pallet.rs pour la règle.
+    fn resolve_pallet(&self, dets: &mut [Detection], owners: &[usize], bests: &[Vec<f32>]) {
+        use crate::models::pallet::{decide, median_size, Verdict};
+        let params = &self.config.pallet;
+        let Some(verdict) = decide(bests, params) else {
+            eprintln!("[palette] similarités incohérentes : classement détection par détection");
+            for d in dets.iter_mut().filter(|d| matches!(d.categorie, DetectionClass::Produit)) {
+                self.classify_produit_or_oob(d);
+            }
+            return;
+        };
+        let (label, score) = match verdict {
+            Verdict::Accept { code, score } => {
+                let ean = self.identifier.lock().unwrap().ean(code).to_string();
+                println!("[palette] {} détections -> {ean} (S = {score:.3}, sans VLM)", bests.len());
+                (ean, score)
+            }
+            Verdict::Reject { score } => {
+                println!("[palette] {} détections -> OOB (S max = {score:.3}, sans VLM)", bests.len());
+                (OOB.to_string(), 1.0 - score)
+            }
+            Verdict::Ambiguous { codes, score } => match self.arbitrate_pallet(dets, owners, bests, &codes) {
+                Ok(Some((label, conf))) => {
+                    println!("[palette] {} détections -> {label} (VLM, conf {conf:.2}, S = {score:.3})", bests.len());
+                    (label, conf)
+                }
+                other => {
+                    if let Err(e) = other {
+                        eprintln!("[palette] arbitrage VLM impossible : {e:#}");
+                    }
+                    // VLM absent ou hésitant : on suit les embeddings poolés (top-1 de la palette), sauf sous reject_sim
+                    if params.reject_sim.map_or(true, |t| score >= t) {
+                        let ean = self.identifier.lock().unwrap().ean(codes[0]).to_string();
+                        println!("[palette] ambigu, repli embeddings : {ean} (S = {score:.3})");
+                        (ean, score)
+                    } else {
+                        println!("[palette] ambigu, repli embeddings : OOB (S = {score:.3})");
+                        (OOB.to_string(), 1.0 - score)
+                    }
+                }
+            },
+        };
+
+        let prod: Vec<usize> = dets.iter().enumerate()
+            .filter(|(_, d)| matches!(d.categorie, DetectionClass::Produit)).map(|(i, _)| i).collect();
+        let size = median_size(&prod.iter().map(|&i| (dets[i].width_cm, dets[i].height_cm)).collect::<Vec<_>>());
+        for &i in &prod {
+            let d = &mut dets[i];
+            d.label = label.clone();
+            d.score = score;
+            if let Some((w, h)) = size {
+                d.set_size(w, h);
+            }
+            self.resolver.resolve(d);
+        }
+    }
+
+    /// Cas ambigu : UN appel VLM, sur la détection la plus proche du meilleur candidat, contre les meilleurs EAN de la
+    /// palette. Renvoie None si le VLM est désactivé ou pas assez sûr.
+    fn arbitrate_pallet(&self, dets: &[Detection], owners: &[usize], bests: &[Vec<f32>], codes: &[usize])
+        -> anyhow::Result<Option<(String, f32)>> {
+        use crate::models::pallet::best_crop;
+        if !self.config.pallet.use_vlm || codes.is_empty() {
+            return Ok(None);
+        }
+        let det = &dets[owners[best_crop(bests, codes[0])]];
+        let cands = self.identifier.lock().map_err(|_| anyhow::anyhow!("Mutex Identifier empoisonné"))?
+            .cands_for_crop(&det.mask.mat, codes, self.number_photos_candidates_for_vlm)?;
+        let r = self.vlm.lock().map_err(|_| anyhow::anyhow!("Mutex VLM empoisonné"))?
+            .process_product(&det.mask.mat, &cands)?;
+        let d = Decision::default();
+        let agree_ok = r.agree || !d.require_agree || r.n_ok < 2;
+        if r.conf >= d.min_conf && agree_ok {
+            return Ok(Some((r.ean.unwrap_or_else(|| OOB.to_string()), r.conf)));
+        }
+        Ok(None)
     }
 
     fn classify_etiquette(&self, detection: &mut Detection) -> anyhow::Result<()> {
